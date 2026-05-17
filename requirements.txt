@@ -1,0 +1,13 @@
+playwright
+pandas
+numpy
+openpyxl
+Pillow
+boto3
+rapidfuzz
+tqdm
+pywin32
+openai
+requests
+python-dotenv
+flask

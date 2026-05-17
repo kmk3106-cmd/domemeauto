@@ -1,0 +1,44 @@
+# 비밀정보 (절대 커밋 금지)
+.env
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+
+# Chrome / Playwright 프로필(런타임·용량·잠금 파일 — 버전 관리 제외)
+chrome_phase2_profile67_copy/
+chrome_phase2_run_copy/
+chrome_phase2_cdp/
+chrome_phase3_cdp/
+chrome_cdp_test/
+chrome_real_profile_copy/
+domeme_browser_profile/
+fresh_chrome_profile*/
+domemedb_nav_verify_profile/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 로그·상태·산출물
+*.log
+logs/
+_panel_stdin.txt
+.week_run_state
+profile_compare_log.txt
+excel_click_fail_page.html
