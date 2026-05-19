@@ -11,9 +11,40 @@ Phase 3: 스피드고 '전송관리 > 공급사판매중지' 상품을 사업자
 
 로그인/네비게이션은 검증된 test_speedgo_upload_1번 의 동선·셀렉터를 재사용.
 """
+import json
 import time
+from pathlib import Path
 
 from test_speedgo_upload_1번 import _goto_with_retry, DOMEME_URL, SPEEDGO_URL, _WAIT
+
+_PROJECT_DIR = Path(__file__).resolve().parent
+_PHASE3_STATE_FILE = _PROJECT_DIR / "phase3_state.json"
+
+
+def _write_phase3_marker(rank: int, biz_id: str, result: str,
+                          before_cnt: int = -1, after_cnt: int = -1) -> None:
+    """phase3_state.json 갱신: rank → {ts, biz_id, result, before, after}.
+    result 코드: alert/count_drop/revert_drop/page_closed (성공) |
+                 revert_noop (잠금-only 추정) | timeout_suspect (의심) |
+                 no_target (대상없음) | no_login/no_open/no_popup/error (실패)."""
+    data = {}
+    try:
+        if _PHASE3_STATE_FILE.exists():
+            data = json.loads(_PHASE3_STATE_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+    except Exception:
+        data = {}
+    data[str(rank)] = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "biz_id": biz_id,
+        "result": result,
+        "before": before_cnt,
+        "after": after_cnt,
+    }
+    _PHASE3_STATE_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 _ID_SEL = ['input[name="userId"]', 'input[name="user_id"]', 'input[name="id"]',
            'input[name="loginId"]', 'input[id*="user"]', 'input[id*="id"]',
@@ -295,31 +326,6 @@ def _popup_all_markets_delete(page) -> bool:
     except Exception:
         pass
 
-    # [진단] 팝업 열린 직후 실제 클릭 후보 요소 덤프 (추측 대신 실 DOM 확인용)
-    try:
-        for ci, c in enumerate(ctxs):
-            info = c.evaluate(r"""() => {
-              const out=[];
-              const els=[...document.querySelectorAll('button,a,input[type=button],input[type=submit],div,span,li,label')];
-              for(const e of els){
-                const tx=((e.value||e.innerText||e.textContent||'')+'').trim().replace(/\s+/g,' ');
-                if(!tx) continue;
-                if(!/삭제|닫기|마켓|취소|확인/.test(tx)) continue;
-                if(tx.length>40) continue;
-                const r=e.getBoundingClientRect();
-                out.push({tag:e.tagName.toLowerCase(),txt:tx,
-                  id:e.id||'',cls:(e.className&&e.className.toString().slice(0,60))||'',
-                  vis:(r.width>0&&r.height>0&&getComputedStyle(e).visibility!=='hidden'),
-                  onclick:(e.getAttribute&&e.getAttribute('onclick')||'').slice(0,50)});
-              }
-              return out.slice(0,40);
-            }""")
-            if info:
-                print(f"[팝업DOM ctx{ci}] " + " | ".join(
-                    f"{x['tag']}#{x['id']}.{x['cls']}=[{x['txt']}]vis{int(x['vis'])}oc:{x['onclick']}"
-                    for x in info))
-    except Exception as _de:
-        print(f"[팝업DOM] 덤프 실패: {_de}")
 
     # 1) 옵션: '활성화 된 마켓에서 모두 삭제' = a#delItem2 (실 DOM 확인된 정확 셀렉터)
     picked = False
@@ -346,7 +352,16 @@ def _popup_all_markets_delete(page) -> bool:
         print("옵션 선택(JS #delItem2)" if picked else "[경고] '모두 삭제' 옵션(#delItem2) 못 찾음")
     time.sleep(0.7)
 
-    # 2) 팝업 확정 '삭제' = button.button2.pup_del  (툴바 button.button3[itemDelete] / 닫기 pup_guanbi 와 구분)
+    # [P3-A] 옵션 클릭만으로 삭제가 트리거되는 사이트 동작이 있음(현 코드 실측: 알림/원복으로 완료).
+    # 그런 경우엔 .pup_del 시도 자체를 건너뛰어 '못 찾음' 노이즈 제거 + 진짜 실패와 구분.
+    try:
+        if not _popup_open(page):
+            print("옵션 클릭 직후 팝업 종료 감지 → 확정 클릭 생략(삭제 트리거됨)")
+            return True
+    except Exception:
+        pass
+
+    # 2) 팝업이 여전히 열려있을 때만 확정 '삭제' 시도 = button.button2.pup_del
     for ctx in ctxs:
         for sel in ('button.pup_del', '.pup_del', 'button.button2.pup_del'):
             try:
@@ -398,39 +413,46 @@ def _wait_delete_done(page, before_cnt, state, max_sec: int = 12 * 60) -> bool:
     poll = 4
     time.sleep(3)
     gone_hits = 0
+    state["after_cnt"] = -1
     for elapsed in range(0, max_sec, poll):
         try:
             if page.is_closed():
                 print("페이지/창 종료 → 삭제 완료 간주")
+                state["result"] = "page_closed"
                 return True
         except Exception:
             pass
         if state.get("done"):
             print("삭제 완료 — ‘삭제되었습니다’ 알림 감지")
+            state["result"] = "alert"
             time.sleep(2)
             return True
         popup = _popup_open(page)
         cur = _count_total(page)
+        state["after_cnt"] = cur
         if elapsed % 40 == 0:
             print(f"[삭제 대기] {elapsed}s · 총건수 {cur}(시작 {before_cnt}) 팝업열림={popup} 알림={state.get('done')}")
         if not popup:
             gone_hits += 1
-            if gone_hits >= 2:  # 팝업 닫힘 = 화면 원복
-                # 강한 성공신호(알림/건수감소) 없이 원복 = 잠금상품-only(정상) 또는 확정누락(미삭제) 모호
+            if gone_hits >= 2:
                 if cur != -1 and before_cnt > 0 and cur >= before_cnt:
                     print(f"[판정] 화면 원복하나 총건수 무변({before_cnt}) — 잠금상품-only로 추정·완료 간주"
                           " (실제 미삭제면 해당 사업자 수동 확인 필요)")
+                    state["result"] = "revert_noop"
                 else:
                     print("화면 원복(상품삭제 팝업 닫힘) → 삭제 완료")
+                    state["result"] = "revert_drop"
                 return True
         else:
             gone_hits = 0
         if cur != -1 and before_cnt > 0 and cur < before_cnt:
             print(f"총건수 감소({before_cnt}→{cur}) → 삭제 완료")
+            state["result"] = "count_drop"
             return True
         time.sleep(poll)
     print(f"[판정] ⚠ 미삭제 의심 — {max_sec}s 내 알림·화면원복·건수변화 전무 "
           "(확정 '삭제' 클릭 누락 가능). 이 사업자 수동 확인 필요. 다음 사업자로 진행")
+    state["result"] = "timeout_suspect"
     return False
 
 
@@ -466,20 +488,23 @@ def _is_logged_in(page) -> bool:
 def main_delete_impl(context, items, password):
     """context 기반: 사업자별로 '새 탭'을 열어 처리.
     한 사업자 탭이 사이트에 의해 닫혀도(삭제 제출 시 흔함) Chrome/다음 사업자에 영향 없음.
-    items = [(rank, user_id), ...]."""
+    items = [(rank, user_id), ...]. 각 사업자 결과는 phase3_state.json 에 마커로 기록(대시보드용)."""
     for idx, (rank, user_id) in enumerate(items):
         print(f"\n{'='*54}\n[{rank}번] 공급사판매중지 삭제 | {user_id}\n{'='*54}")
         page = None
         deleted_attempted = False
-        state = {"done": False}  # 다이얼로그 핸들러가 '삭제되었습니다' 감지 시 True
+        state = {"done": False, "after_cnt": -1}
+        outcome = "error"  # 기본값: 어디서 죽었는지 모를 때
+        before = -1
         try:
             page = context.new_page()
             try:
-                page.on("dialog", _make_dialog_handler(state))  # 확정 confirm 수락 + 완료감지
+                page.on("dialog", _make_dialog_handler(state))
             except Exception:
                 pass
             if not _login(page, user_id, password, do_logout=(idx > 0)):
                 print(f"[{rank}번] 로그인 진입 실패 → 다음 사업자")
+                outcome = "no_login"
                 continue
             if not _is_logged_in(page):
                 print(f"[{rank}번] [경고] 로그인 상태 미확인(로그아웃 링크 없음) — 그래도 진입 시도")
@@ -487,33 +512,42 @@ def main_delete_impl(context, items, password):
                 print(f"[{rank}번] 로그인 상태 확인됨")
             if not _open_supplier_stop(page):
                 print(f"[{rank}번] 공급사판매중지 진입 실패 → 다음 사업자")
+                outcome = "no_open"
                 continue
             before = _count_total(page)
             print(f"[{rank}번] 공급사판매중지 목록: 총 {before}건")
             if before == 0:
                 print(f"[{rank}번] 삭제할 상품 없음 → 스킵")
+                outcome = "no_target"
                 continue
             _set_500(page)
-            _wait_list_loaded(page)  # 로딩 안정 후 전체선택 (불완전해도 진행: 품절삭제)
+            _wait_list_loaded(page)
             before = _count_total(page)
             if not _select_all(page):
                 print(f"[{rank}번] 전체선택 일부 실패 — 그대로 진행")
             if not _click_delete_open_popup(page):
                 print(f"[{rank}번] 삭제 버튼/팝업 미표시 → 이 사업자만 스킵")
+                outcome = "no_popup"
                 continue
-            deleted_attempted = True  # 이 시점 이후 페이지 닫힘 = 삭제 제출됨으로 간주
+            deleted_attempted = True
             _popup_all_markets_delete(page)
-            # 종료규칙: '삭제되었습니다' 알림 OR 화면 원복(팝업닫힘) OR 페이지종료 까지 대기
             _wait_delete_done(page, before, state)
-            print(f"[{rank}번] 1배치 삭제 종료")
+            outcome = state.get("result", "unknown")
+            print(f"[{rank}번] 1배치 삭제 종료 (result={outcome})")
             time.sleep(2)
         except Exception as e:
             msg = str(e)
             if deleted_attempted and "closed" in msg.lower():
                 print(f"[{rank}번] 삭제 제출 후 페이지/창 종료 — 정상 처리로 간주, 다음 사업자")
+                outcome = "page_closed"
             else:
                 print(f"[{rank}번] 예외 → 다음 사업자: {msg[:160]}")
+                outcome = "error"
         finally:
+            try:
+                _write_phase3_marker(rank, user_id, outcome, before, state.get("after_cnt", -1))
+            except Exception as _me:
+                print(f"[{rank}번] 마커 기록 실패(무시): {_me}")
             try:
                 if page is not None and not page.is_closed():
                     page.close()

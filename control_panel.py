@@ -50,15 +50,18 @@ if not _STDIN_FEED.exists():
     _STDIN_FEED.write_text("\n\n\n\n\n\n", encoding="ascii")
 
 P1 = [PY, "-u", "domeme_auto_login_temp.py"]
+P1_FILL = [PY, "-u", "run_phase1_fill.py"]  # 회차 채우기(자동 재시도) 래퍼
 P2 = [PY, "-u", "run_phase2.py"]
 P3 = [PY, "-u", "run_phase3.py"]
 # 고정 버튼: (표시명, [(단계명, cmd|None, env추가dict), ...])
 JOBS = {
-    "p1":   ("Phase 1만", [("Phase 1", P1, {})]),
-    "p2":   ("Phase 2만", [("Phase 2", P2, {})]),
-    "p3":   ("Phase 3만 (공급사판매중지 삭제)", [("Phase 3", P3, {})]),
-    "p1_2": ("Phase 1~2 일괄", [("Phase 1", P1, {}), ("Phase 2", P2, {})]),
-    "p1_3": ("Phase 1~3 일괄", [("Phase 1", P1, {}), ("Phase 2", P2, {}), ("Phase 3", P3, {})]),
+    "p1":      ("Phase 1만", [("Phase 1", P1, {})]),
+    "p1_fill": ("Phase 1 채우기 (회차 완성까지 자동 재시도)", [("Phase 1 채우기", P1_FILL, {})]),
+    "p2":      ("Phase 2만", [("Phase 2", P2, {})]),
+    "p3":      ("Phase 3만 (공급사판매중지 삭제)", [("Phase 3", P3, {})]),
+    "p1_2":    ("Phase 1~2 일괄", [("Phase 1", P1, {}), ("Phase 2", P2, {})]),
+    "p1_3":    ("Phase 1~3 일괄", [("Phase 1", P1, {}), ("Phase 2", P2, {}), ("Phase 3", P3, {})]),
+    "pfill_2_3": ("Phase 채우기→2→3", [("Phase 1 채우기", P1_FILL, {}), ("Phase 2", P2, {}), ("Phase 3", P3, {})]),
 }
 
 app = Flask(__name__)
@@ -209,8 +212,16 @@ def progress():
     ymw_str, _wr = get_upload_path_from_state()
     base = Path(EXCEL_SAVE_BASE) / ymw_str
     n_acc = max(6, len(ACCOUNTS))
+    # Phase 3 결과 마커 로드 (회차 무관, 사업자 rank 키)
+    p3_state = {}
+    try:
+        import json as _json
+        p3_path = PROJECT_DIR / "phase3_state.json"
+        if p3_path.exists():
+            p3_state = _json.loads(p3_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        p3_state = {}
     runs = []
-    # 1~7회차(RUNS_PER_WEEK) 전부 항상 표시. 폴더 없는 회차는 wr_exists=False(미실행)
     for wr_no in range(1, RUNS_PER_WEEK + 1):
         wd = base / f"{wr_no}회차"
         wr_exists = wd.is_dir()
@@ -218,6 +229,9 @@ def progress():
         for n in range(1, min(n_acc, 6) + 1):
             biz_id = ACCOUNTS[n - 1] if n - 1 < len(ACCOUNTS) else f"사업자{n}"
             bf = wd / f"{n}번사업자"
+            p3 = p3_state.get(str(n)) or {}
+            p3_payload = {"p3_result": p3.get("result", ""), "p3_at": p3.get("ts", ""),
+                          "p3_before": p3.get("before", -1), "p3_after": p3.get("after", -1)}
             if wr_exists and bf.is_dir():
                 steps, p1_done = _p1_steps(bf, n)
                 sent = bf / ".phase2_sent"
@@ -229,10 +243,11 @@ def progress():
                         p2_at = "기록됨"
                 rows.append({"rank": n, "biz_id": biz_id, "exists": True,
                              "steps": steps, "p1_done": p1_done,
-                             "p2_sent": bool(p2_at), "p2_at": p2_at})
+                             "p2_sent": bool(p2_at), "p2_at": p2_at, **p3_payload})
             else:
                 rows.append({"rank": n, "biz_id": biz_id, "exists": False,
-                             "steps": {}, "p1_done": False, "p2_sent": False, "p2_at": ""})
+                             "steps": {}, "p1_done": False, "p2_sent": False, "p2_at": "",
+                             **p3_payload})
         runs.append({"week_run": wr_no, "wr_exists": wr_exists, "rows": rows})
     return jsonify({"ymw": ymw_str, "runs": runs,
                     "updated": datetime.now().strftime("%H:%M:%S")})
@@ -284,10 +299,12 @@ PANEL_HTML = r"""
  <div class="box"><h3>① 전체 실행</h3>
   <div class="btns">
    <button class="b1" onclick="run('p1')">▶ Phase 1만</button>
+   <button class="b1" onclick="run('p1_fill')">▶ P1 채우기(회차완성)</button>
    <button class="b2" onclick="run('p2')">▶ Phase 2만</button>
    <button class="b3" onclick="if(confirm('Phase 3: 공급사판매중지 상품을 전 마켓에서 영구 삭제합니다 (6사업자). 진행?'))run('p3')">▶ Phase 3만 <span class="sub">(공급사판매중지 삭제)</span></button>
    <button class="bb" onclick="run('p1_2')">⏩ 1~2 일괄</button>
    <button class="bb" onclick="if(confirm('1~3 일괄: 3단계에서 공급사판매중지 상품을 전 마켓 영구 삭제합니다. 진행?'))run('p1_3')">⏩ 1~3 일괄</button>
+   <button class="bb" onclick="if(confirm('채우기→2→3: P1 회차 채우기(자동 재시도) 후 2·3(영구삭제). 진행?'))run('pfill_2_3')">⏩ 채우기→2→3</button>
    <button class="bs" onclick="stop()">■ 중단</button>
   </div>
   <div style="margin-top:10px"><span id="pill" class="pill p-idle">대기</span>
@@ -363,12 +380,23 @@ async function loadProg(){
    var tag = run.wr_exists ? '' : ' <span class=x style="font-weight:400">(폴더없음·미실행)</span>';
    h+='<h3>'+run.week_run+'회차'+tag+'</h3><table><thead><tr><th>사업자</th><th>계정</th>';
    steps.forEach(s=>h+='<th>'+s+'</th>');
-   h+='<th>P1완료</th><th>P2전송</th></tr></thead><tbody>';
+   h+='<th>P1완료</th><th>P2전송</th><th>P3 삭제</th></tr></thead><tbody>';
    run.rows.forEach(r=>{
     h+='<tr><td>'+r.rank+'번</td><td>'+r.biz_id+'</td>';
     steps.forEach(s=>h+='<td>'+(r.exists?mark(r.steps[s]):'<span class=x>·</span>')+'</td>');
     h+='<td>'+(r.p1_done?'<span class=y>완료</span>':'<span class=x>미완</span>')+'</td>';
-    h+='<td>'+(r.p2_sent?('<span class=y>'+(r.p2_at||'전송')+'</span>'):'<span class=x>미전송</span>')+'</td></tr>';
+    h+='<td>'+(r.p2_sent?('<span class=y>'+(r.p2_at||'전송')+'</span>'):'<span class=x>미전송</span>')+'</td>';
+    // P3 삭제 결과 매핑 (성공/잠금추정/의심/대상없음/실패/없음)
+    var p3html='<span class=x>·</span>';
+    var pr=r.p3_result||'';
+    var sx={alert:'성공',count_drop:'성공',revert_drop:'성공',page_closed:'성공',
+            revert_noop:'완료(잠금)',timeout_suspect:'⚠의심',no_target:'대상없음',
+            no_login:'실패(로그인)',no_open:'실패(진입)',no_popup:'실패(팝업)',error:'실패(예외)'};
+    if(pr){ var t=sx[pr]||pr; var cls=(['alert','count_drop','revert_drop','page_closed'].indexOf(pr)>=0)?'y':
+       (pr==='timeout_suspect'||pr.indexOf('실패')===0||sx[pr]&&sx[pr].indexOf('실패')===0?'alert':
+       (pr==='no_target'?'sub':'sub'));
+       p3html='<span class='+cls+'>'+t+'</span><br><span class=sub style="font-size:10px">'+(r.p3_at||'')+'</span>'; }
+    h+='<td>'+p3html+'</td></tr>';
    });
    h+='</tbody></table>';
   });

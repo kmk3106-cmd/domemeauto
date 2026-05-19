@@ -67,6 +67,18 @@ def load_module(name: str, filepath: str):
     return mod
 
 
+def _skip_done(label: str, out_path: str) -> bool:
+    """[P4 부분재개] 산출물 파일이 이미 존재(비어있지 않음)면 그 STEP 스킵."""
+    try:
+        if out_path and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            print(f"[run_all] {label} 이미 완료(출력 존재) — 스킵: {os.path.basename(out_path)}",
+                  flush=True)
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def run_step1_xls():
     """STEP1: .xls → .xlsx 변환"""
     path = os.path.join(PROJECT_DIR, "STEP1.xls변환.py")
@@ -79,17 +91,21 @@ def run_step1_xls():
 
 def run_step1_1():
     """STEP1-1: 엑셀 파일 합치기 → {PREFIX}_통합상품명.xlsx"""
+    out = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명.xlsx")
+    if _skip_done("STEP1-1 엑셀합치기", out): return
     path = os.path.join(PROJECT_DIR, "STEP1-1엑셀파일합치기.py")
     mod = load_module("step1_1", path)
     mod.INPUT_DIR = BASE_DIR
-    mod.OUTPUT_XLSX = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명.xlsx")
+    mod.OUTPUT_XLSX = out
     mod.INPUT_FILES = []
     mod.main()
     print("[run_all] STEP1-1 엑셀합치기 완료\n")
 
 
 def run_step2():
-    """STEP2: 이미지 다운로드/변환"""
+    """STEP2: 이미지 다운로드/변환. 이후 STEP5-1 산출물(_domeme_links.xlsx) 존재 시 재실행 불필요."""
+    if _skip_done("STEP2 이미지변환", os.path.join(BASE_DIR, f"{PREFIX}_domeme_links.xlsx")):
+        return
     path = os.path.join(PROJECT_DIR, "STEP2.이미지변환_2nd.py")
     mod = load_module("step2", path)
     mod.BASE_DIR = BASE_DIR
@@ -100,6 +116,8 @@ def run_step2():
 
 def run_step3():
     """STEP3: 대표키워드(OpenAPI) → {PREFIX}_통합상품명_keywords.xlsx"""
+    out = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_keywords.xlsx")
+    if _skip_done("STEP3 대표키워드", out): return
     path = os.path.join(PROJECT_DIR, "STEP3.openapi이용 대표상품명작성(단어1개).py")
     mod = load_module("step3", path)
     mod.INPUT_PATHS = [os.path.join(BASE_DIR, f"{PREFIX}_통합상품명.xlsx")]
@@ -112,6 +130,8 @@ def run_step3():
 
 def run_step4():
     """STEP4: 쭌쭌쌤 상품명(OpenAPI) → {PREFIX}_통합상품명_keywords_쭌쭌쌤.xlsx"""
+    out = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_keywords_쭌쭌쌤.xlsx")
+    if _skip_done("STEP4 쭌쭌쌤 상품명", out): return
     path = os.path.join(PROJECT_DIR, "STEP4.openapi이용 상품명작성(쭌쭌쌤).py")
     mod = load_module("step4", path)
     mod.INPUT_PATHS = [os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_keywords.xlsx")]
@@ -123,7 +143,10 @@ def run_step4():
 
 
 def run_step5():
-    """STEP5: 네이버클라우드 이미지 업로드"""
+    """STEP5: 네이버클라우드 이미지 업로드. STEP5-1 산출물 존재 시 스킵(이미 업로드됨)."""
+    if _skip_done("STEP5 네이버클라우드 업로드",
+                  os.path.join(BASE_DIR, f"{PREFIX}_domeme_links.xlsx")):
+        return
     path = os.path.join(PROJECT_DIR, "STEP5.네이버클라우드이미지업로드.py")
     mod = load_module("step5", path)
     mod.LOCAL_DIR = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_이미지")
@@ -133,19 +156,23 @@ def run_step5():
 
 def run_step5_1():
     """STEP5-1: 버킷 목록 → {PREFIX}_domeme_links.xlsx"""
+    out = os.path.join(BASE_DIR, f"{PREFIX}_domeme_links.xlsx")
+    if _skip_done("STEP5-1 링크추출", out): return
     path = os.path.join(PROJECT_DIR, "STEP5-1.네이버이미지Link추출.py")
     mod = load_module("step5_1", path)
-    mod.OUTPUT_XLSX = os.path.join(BASE_DIR, f"{PREFIX}_domeme_links.xlsx")
+    mod.OUTPUT_XLSX = out
     mod.main()
     print("[run_all] STEP5-1 링크추출 완료\n")
 
 
 def run_step6_category():
     """STEP6: 네이버 카테고리 매칭 (Playwright 등 기존 이벤트 루프와 충돌 방지: 별도 스레드에서 asyncio.run)"""
+    out = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_카테고리매핑_결과.xlsx")
+    if _skip_done("STEP6 카테고리매칭", out): return
     path = os.path.join(PROJECT_DIR, "STEP6.네이버카테고리매칭.py")
     mod = load_module("step6_cat", path)
     mod.PRODUCTS_XLSX = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_keywords.xlsx")
-    mod.OUTPUT_XLSX = os.path.join(BASE_DIR, f"{PREFIX}_통합상품명_카테고리매핑_결과.xlsx")
+    mod.OUTPUT_XLSX = out
 
     import concurrent.futures
     def _run_async():
@@ -164,6 +191,9 @@ def run_step6_category():
 
 def run_step6_merge():
     """STEP6: 상품명/이미지/카테고리 최종 합치기. 엑셀생성규칙_최종 적용 시 {user_id}_{키워드}_{주차}_{회차}회_최종.xlsx"""
+    out_name = FINAL_OUTPUT_FILENAME if FINAL_OUTPUT_FILENAME else f"{PREFIX}_통합상품명_최종.xlsx"
+    out_full = os.path.join(BASE_DIR, out_name)
+    if _skip_done("STEP6 최종합치기", out_full): return
     path = os.path.join(PROJECT_DIR, "STEP6.상품명,이미지링크최종합치기.py")
     mod = load_module("step6_merge", path)
     mod.BASE = Path(BASE_DIR)
@@ -171,7 +201,6 @@ def run_step6_merge():
     mod.FILE2 = mod.BASE / f"{PREFIX}_통합상품명_keywords_쭌쭌쌤.xlsx"
     mod.FILE3 = mod.BASE / f"{PREFIX}_domeme_links.xlsx"
     mod.FILE4 = mod.BASE / f"{PREFIX}_통합상품명_카테고리매핑_결과.xlsx"
-    out_name = FINAL_OUTPUT_FILENAME if FINAL_OUTPUT_FILENAME else f"{PREFIX}_통합상품명_최종.xlsx"
     mod.OUTPUT = mod.BASE / out_name
     mod.main()
     print("[run_all] STEP6 최종합치기 완료\n")

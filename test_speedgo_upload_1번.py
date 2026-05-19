@@ -374,6 +374,28 @@ def main_upload_impl(page, items, password):
                 f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{final_path.name}", encoding="utf-8")
         except Exception:
             pass
+        # [P2-A] 상품일괄전송 결과 그리드 원본 텍스트 덤프 (마켓별 전송성공/실패+사유 파악용)
+        try:
+            from pathlib import Path as _P2
+            _LD = _P2(PROJECT_DIR) / "logs"
+            _LD.mkdir(exist_ok=True)
+            _txt = page.evaluate(
+                "() => document.body ? (document.body.innerText||'') : ''"
+            ) or ""
+            _ts = time.strftime("%Y%m%d_%H%M%S")
+            (_LD / f"phase2_results_{user_id}_{_ts}.txt").write_text(
+                f"=== {final_path.name} ({_ts}) ===\n{_txt[:200000]}", encoding="utf-8")
+            # 빠른 요약: 전송실패/전송성공 카운트
+            try:
+                _ok = _txt.count("전송성공")
+                _ng = _txt.count("전송실패")
+                _na = _txt.count("전송안함")
+                print(f"[P2 결과 요약] {user_id}: 전송성공={_ok} 전송실패={_ng} 전송안함={_na}",
+                      flush=True)
+            except Exception:
+                pass
+        except Exception as _de:
+            print(f"[P2 결과 덤프] 실패(무시): {_de}", flush=True)
         time.sleep(2)
     print("모든 사업자 업로드 완료.")
 
