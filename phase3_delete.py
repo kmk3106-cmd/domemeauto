@@ -415,8 +415,13 @@ def _wait_delete_done(page, before_cnt, state, max_sec: int = 12 * 60) -> bool:
             print(f"[삭제 대기] {elapsed}s · 총건수 {cur}(시작 {before_cnt}) 팝업열림={popup} 알림={state.get('done')}")
         if not popup:
             gone_hits += 1
-            if gone_hits >= 2:  # 팝업 닫힘 = 화면 원복 = 완료
-                print("화면 원복(상품삭제 팝업 닫힘) → 삭제 완료 간주")
+            if gone_hits >= 2:  # 팝업 닫힘 = 화면 원복
+                # 강한 성공신호(알림/건수감소) 없이 원복 = 잠금상품-only(정상) 또는 확정누락(미삭제) 모호
+                if cur != -1 and before_cnt > 0 and cur >= before_cnt:
+                    print(f"[판정] 화면 원복하나 총건수 무변({before_cnt}) — 잠금상품-only로 추정·완료 간주"
+                          " (실제 미삭제면 해당 사업자 수동 확인 필요)")
+                else:
+                    print("화면 원복(상품삭제 팝업 닫힘) → 삭제 완료")
                 return True
         else:
             gone_hits = 0
@@ -424,7 +429,8 @@ def _wait_delete_done(page, before_cnt, state, max_sec: int = 12 * 60) -> bool:
             print(f"총건수 감소({before_cnt}→{cur}) → 삭제 완료")
             return True
         time.sleep(poll)
-    print("[삭제 대기] 타임아웃 — 다음 사업자로 진행(수동 확인 권장)")
+    print(f"[판정] ⚠ 미삭제 의심 — {max_sec}s 내 알림·화면원복·건수변화 전무 "
+          "(확정 '삭제' 클릭 누락 가능). 이 사업자 수동 확인 필요. 다음 사업자로 진행")
     return False
 
 

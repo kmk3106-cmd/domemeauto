@@ -1758,17 +1758,79 @@ def _get_last_week_ymw(target_year: int, target_month: int, target_week: int):
     return target_year - 1, 12, 5
 
 
+def _month_season(target_month: int) -> str:
+    """타깃월(현재+2 반영된 값) → 계절. 3~5 봄 / 6~8 여름 / 9~10 가을 / 11~2 겨울."""
+    m = ((int(target_month) - 1) % 12) + 1
+    if m in (3, 4, 5):
+        return "봄"
+    if m in (6, 7, 8):
+        return "여름"
+    if m in (9, 10):
+        return "가을"
+    return "겨울"
+
+
+# ④ 하이브리드: 카테고리×계절 시즌 후보풀(필수·결정적). 네이버 트렌드 재정렬은
+# 기존 _get_keyword_from_naver_api 호출부에서 이 시즌 후보 내에서 작동.
+# 스포츠/레저는 기존 WEEK_KEYWORD_CANDIDATES(월·주 큐레이션) 유지. 제외 카테고리 키워드 없음.
+SEASONAL_POOL = {
+    "패션의류": {
+        "봄": ["가디건", "트렌치코트", "블라우스", "린넨자켓", "야상", "후드집업", "면바지", "셔츠", "니트가디건", "봄원피스", "슬랙스", "바람막이"],
+        "여름": ["반팔티", "린넨바지", "반바지", "시원한원피스", "냉감티", "래쉬가드", "민소매", "7부바지", "쿨링셔츠", "여름원피스", "린넨셔츠", "캐주얼반바지"],
+        "가을": ["니트", "가디건", "트렌치코트", "맨투맨", "후드티", "야상", "청자켓", "슬랙스", "가을원피스", "블레이저", "코듀로이", "니트원피스"],
+        "겨울": ["패딩", "롱패딩", "숏패딩", "코트", "기모바지", "니트", "목도리", "플리스", "무스탕", "패딩조끼", "기모레깅스", "터틀넥"],
+    },
+    "디지털/가전": {
+        "봄": ["무선이어폰", "보조배터리", "블루투스스피커", "USB허브", "공기청정기", "가습기", "스마트워치", "충전기", "차량용거치대", "키보드", "마우스", "보호필름"],
+        "여름": ["USB선풍기", "휴대용선풍기", "미니선풍기", "서큘레이터", "제습기", "무선선풍기", "넥밴드선풍기", "보조배터리", "차량용선풍기", "쿨링패드", "탁상선풍기", "이동식에어컨"],
+        "가을": ["가습기", "무선이어폰", "스마트워치", "공기청정기", "블루투스스피커", "보조배터리", "충전기", "노트북파우치", "키보드", "USB허브", "거치대", "케이블"],
+        "겨울": ["가습기", "전기요", "온풍기", "미니히터", "전기방석", "손난로", "발난로", "가열식가습기", "전기담요", "USB손난로", "무선이어폰", "보조배터리"],
+    },
+    "가구/인테리어": {
+        "봄": ["커튼", "러그", "수납장", "행거", "화분", "무드등", "침구", "책장", "선반", "정리함", "거울", "옷걸이"],
+        "여름": ["인견침구", "시원한이불", "대나무매트", "차렵이불", "제습용품", "수납장", "돗자리", "쿨매트", "발매트", "정리함", "행거", "선반"],
+        "가을": ["차렵이불", "러그", "커튼", "무드등", "수납장", "침구", "카펫", "책장", "선반", "행거", "거울", "정리함"],
+        "겨울": ["극세사이불", "전기요", "발열매트", "두꺼운커튼", "러그", "온수매트", "카펫", "수납장", "침구세트", "무드등", "발매트", "단열뽁뽁이"],
+    },
+    "여가/생활편의": {
+        "봄": ["캠핑용품", "피크닉매트", "텀블러", "보냉백", "돗자리", "캠핑의자", "휴대용품", "여행용품", "정리수납", "파우치", "물병", "캠핑테이블"],
+        "여름": ["보냉백", "아이스박스", "캠핑선풍기", "휴대용선풍기", "물놀이용품", "쿨토시", "보냉가방", "아이스팩", "텀블러", "캠핑의자", "워터저그", "비치용품"],
+        "가을": ["캠핑용품", "캠핑의자", "캠핑테이블", "보온병", "텀블러", "랜턴", "피크닉", "등산용품", "보냉백", "파우치", "여행용품", "캐리어"],
+        "겨울": ["보온병", "텀블러", "핫팩", "캠핑난로", "손난로", "무릎담요", "캠핑용품", "히터", "캠핑의자", "보온도시락", "방한용품", "캐리어"],
+    },
+    "생활/건강": {
+        "봄": ["마스크", "물티슈", "세탁용품", "섬유유연제", "제습제", "청소용품", "방향제", "위생용품", "수건", "살균스프레이", "정리용품", "탈취제"],
+        "여름": ["제습제", "모기퇴치", "해충퇴치", "살충제", "쿨토시", "물티슈", "땀패드", "제습용품", "탈취제", "방충망", "쿨링패치", "휴대용선풍기"],
+        "가을": ["마스크", "물티슈", "가습기용품", "세탁용품", "섬유유연제", "방향제", "청소용품", "수건", "위생용품", "핫팩", "탈취제", "정리용품"],
+        "겨울": ["핫팩", "손난로", "마스크", "가습기용품", "발열패치", "찜질팩", "온열패치", "물티슈", "핸드크림", "보온용품", "전기방석", "수건"],
+    },
+    "패션잡화": {
+        "봄": ["에코백", "크로스백", "캡모자", "스카프", "선글라스", "양말", "벨트", "백팩", "토트백", "키링", "머플러", "파우치"],
+        "여름": ["밀짚모자", "선글라스", "양산", "비치백", "썬캡", "라탄백", "비치슬리퍼", "쿨토시", "발토시", "메쉬백", "부채", "버킷햇"],
+        "가을": ["베레모", "머플러", "크로스백", "백팩", "가죽벨트", "스카프", "캡모자", "토트백", "장갑", "양말", "버킷햇", "키링"],
+        "겨울": ["목도리", "장갑", "비니", "머플러", "기모양말", "귀마개", "방한모자", "패딩가방", "백팩", "넥워머", "가죽장갑", "털슬리퍼"],
+    },
+}
+
+
 def _get_6_keywords_for_category(target_month: int, target_week: int, category: str):
-    """회차(카테고리)별 6개 키워드. 스포츠/레저는 주차별 후보, 나머지는 풀 30개 중 주차마다 6개씩 돌려쓰기(겹침 방지)."""
+    """회차(카테고리)별 6개 키워드.
+    ④ 하이브리드: 스포츠/레저=WEEK_KEYWORD_CANDIDATES(월·주). 그 외=카테고리×계절 SEASONAL_POOL
+    에서 주차별 6개(겹침 방지). 시즌풀 없으면 기존 CATEGORY_DEFAULT_KEYWORDS 폴백."""
     if category == "스포츠/레저":
         base6 = WEEK_KEYWORD_CANDIDATES.get((target_month, target_week))
         if not base6:
             fallback = MONTH_KEYWORD_FALLBACK.get(target_month, "인기상품")
             base6 = [fallback] * 6
         return base6[:6]
+    season = _month_season(target_month)
+    spool = (SEASONAL_POOL.get(category) or {}).get(season)
+    if spool and len(spool) >= 6:
+        start = ((target_week - 1) * 6) % len(spool)
+        return [spool[(start + i) % len(spool)] for i in range(6)]
+    # 폴백: 기존 고정 풀(계절 무관) — 시즌풀 누락 시 안전망
     pool = CATEGORY_DEFAULT_KEYWORDS.get(category)
     if pool and len(pool) >= 30:
-        # 주차마다 다른 6개: 1주차 0~5, 2주차 6~11, … 5주차 24~29 → 1월만 해도 5세트 겹침 없음
         week_index = (target_month - 1) * 5 + (target_week - 1)
         slot = week_index % 5
         start = slot * 6
@@ -2761,6 +2823,75 @@ def _ensure_domeme_ready_for_login(work_page, rank: int) -> bool:
     return False
 
 
+# === Phase 1 전용 프로필 + 원격디버깅 CDP (Phase 3 와 동일 방식) ===
+# 실제 Chrome 프로필 robocopy 복사를 폐기 → 개인 Chrome 켜져 있어도 '프로필복사실패' 없음.
+# 도매매 로그인은 ID/PW 라 전용 프로필이면 충분(쿠키는 이 폴더에 누적 유지).
+_P1_CDP_DIR = PROJECT_DIR / "chrome_phase1_cdp"
+_P1_CDP_PORT = int(os.environ.get("PHASE1_CDP_PORT", "9223"))
+
+
+def _p1_kill_debug_chrome() -> int:
+    """이 전용 user-data-dir 를 쓰는 chrome 만 종료 (사용자 일반 Chrome 미접촉)."""
+    marker = str(_P1_CDP_DIR).lower()
+    try:
+        import psutil
+    except ImportError:
+        return 0
+    n = 0
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if "chrome" not in (p.info.get("name") or "").lower():
+                continue
+            cmd = " ".join(str(c or "") for c in (p.info.get("cmdline") or [])).lower()
+            if marker in cmd:
+                p.kill()
+                n += 1
+        except Exception:
+            continue
+    return n
+
+
+def _p1_wait_cdp(port: int, timeout: int = 40) -> bool:
+    import urllib.request
+    url = f"http://127.0.0.1:{port}/json/version"
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with urllib.request.urlopen(url, timeout=3) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(1)
+    return False
+
+
+def _p1_launch_debug_chrome():
+    import subprocess
+    chrome = CHROME_EXECUTABLE if os.path.isfile(CHROME_EXECUTABLE) else "chrome"
+    _P1_CDP_DIR.mkdir(parents=True, exist_ok=True)
+    for lk in ("SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile"):
+        try:
+            (_P1_CDP_DIR / lk).unlink(missing_ok=True)
+        except Exception:
+            pass
+    pd = (PHASE2_CHROME_PROFILE_DIR or "Profile 67").strip()
+    for sub in ("Default", pd):
+        try:
+            pj = _P1_CDP_DIR / sub / "Preferences"
+            if pj.exists():
+                t = pj.read_text(encoding="utf-8", errors="ignore").replace(
+                    '"exit_type":"Crashed"', '"exit_type":"Normal"')
+                pj.write_text(t, encoding="utf-8")
+        except Exception:
+            pass
+    return subprocess.Popen([
+        chrome, f"--remote-debugging-port={_P1_CDP_PORT}",
+        f"--user-data-dir={_P1_CDP_DIR}", f"--profile-directory={pd}",
+        "--start-maximized", "--no-first-run", "--no-default-browser-check",
+        "about:blank",
+    ])
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -2770,33 +2901,14 @@ def main():
         print("그 다음: playwright install chromium")
         sys.exit(1)
 
-    user_data_dir = _resolve_user_data_dir()
-    if USE_REAL_CHROME_PROFILE and USE_REAL_PROFILE_COPY:
-        if not _copy_real_chrome_profile():
-            print("[경고] 프로필 복사 실패. 자동화 프로필로 대체합니다.")
-            user_data_dir = AUTOMATION_PROFILE
-        else:
-            user_data_dir = REAL_PROFILE_COPY_DIR
-
-    # Phase 2 와 같은 User Data 트리: Profile 67 만 복사한 폴더(접속·로그인 동선 일치). 끄려면 PHASE1_LAUNCH_LIKE_PHASE2=0
-    PHASE1_LAUNCH_LIKE_PHASE2 = os.environ.get("PHASE1_LAUNCH_LIKE_PHASE2", "1").lower() in (
-        "1",
-        "true",
-        "yes",
+    # Phase 3 와 동일 방식: 전용 프로필 + 원격디버깅 CDP. 실제 Chrome 프로필 robocopy 복사 폐기.
+    # → 개인 Chrome 켜져 있어도 '프로필복사실패' 없음. 도매매 로그인은 ID/PW 라 전용 프로필이면 충분.
+    user_data_dir = _P1_CDP_DIR
+    print(
+        f"[실행 설정] Phase1 = Phase3 방식: 전용 프로필({_P1_CDP_DIR.name}) + 원격디버깅 CDP(port {_P1_CDP_PORT}). "
+        "실제 프로필 복사 안 함 → 개인 Chrome 켜져 있어도 무방.",
+        flush=True,
     )
-    if USE_REAL_CHROME_PROFILE and PHASE1_LAUNCH_LIKE_PHASE2:
-        print(
-            "[실행 설정] Phase1 Chrome = Phase2 동일: Profile 67 전용 복사본(user_data_dir) 시도…",
-            flush=True,
-        )
-        if _copy_phase2_profile67():
-            user_data_dir = REAL_PHASE2_COPY_DIR
-            print(f"[실행 설정] user_data_dir → {user_data_dir} (Phase2와 동일 경로)", flush=True)
-        else:
-            print(
-                "[실행 설정] Profile67 전용 복사 실패 → 위에서 정한 user_data_dir 로 계속합니다.",
-                flush=True,
-            )
 
     now = datetime.now()
     target_month = (now.month + 2 - 1) % 12 + 1  # 현재+2 (3월→5월)
@@ -2842,47 +2954,33 @@ def main():
     last_week_30 = _load_week_keywords(_week_key_key(ly, lm, lw))
 
     with sync_playwright() as pw:
-        # Phase 2 블록과 동일한 launch_persistent_context (ignore_default_args·args·timeout·executable)
-        launch_kw = _chrome_persistent_launch_kw_phase2_identical(str(user_data_dir))
-        launch_kw_saved = dict(launch_kw)
-        profile_type = "실제_Chrome_프로필" if USE_REAL_CHROME_PROFILE else "자동화_전용_프로필"
-        print("[실행 설정] 프로필:", profile_type)
-        if USE_REAL_CHROME_PROFILE and not USE_REAL_PROFILE_COPY:
-            print("[실행 설정] 실제 프로필 직접 사용: Chrome 창을 모두 닫은 뒤 실행하세요.")
-        elif USE_REAL_CHROME_PROFILE and USE_REAL_PROFILE_COPY:
-            print("[실행 설정] 실제 Chrome 프로필 복사본 사용 (Chrome 실행 중에도 가능)")
-        print("[실행 설정] user_data_dir:", launch_kw_saved["user_data_dir"])
+        # Phase 3 와 동일: 전용 프로필 Chrome 을 원격디버깅으로 띄우고 CDP 로 연결 (프로필 복사 없음)
+        launch_kw_saved = {"user_data_dir": str(_P1_CDP_DIR)}  # 후방 호환(잔존 참조용)
+        _pre = _p1_kill_debug_chrome()
+        if _pre:
+            print(f"[시작] 이전 Phase1 디버그 Chrome {_pre}개 정리", flush=True)
+            time.sleep(2)
+        _chrome_proc = _p1_launch_debug_chrome()
         print(
-            "[실행 설정] Phase1 = Phase2: --profile-directory="
-            f"{(PHASE2_CHROME_PROFILE_DIR or 'Profile 67').strip()}",
+            f"[시작] 전용 Chrome 기동 (pid={_chrome_proc.pid}, port={_P1_CDP_PORT}, "
+            f"dir={_P1_CDP_DIR.name}) — 개인 Chrome 무관",
             flush=True,
         )
-        _remove_chrome_profile_lock_files(Path(launch_kw_saved["user_data_dir"]))
-
-        context = None
-        for _launch_try in range(1, 3):
-            launch_try_kw = dict(launch_kw_saved)
+        if not _p1_wait_cdp(_P1_CDP_PORT, timeout=45):
+            print(f"[시작] [오류] CDP 포트 {_P1_CDP_PORT} 응답 없음 → 종료", flush=True)
             try:
-                try:
-                    context = pw.chromium.launch_persistent_context(**launch_try_kw, no_viewport=True)
-                except TypeError:
-                    try:
-                        context = pw.chromium.launch_persistent_context(**launch_try_kw)
-                    except Exception as e:
-                        launch_try_kw.pop("executable_path", None)
-                        launch_try_kw["channel"] = "chrome"
-                        context = pw.chromium.launch_persistent_context(**launch_try_kw)
-                        print(f"Chrome 대신 Chromium 사용: {e}")
-                break
-            except Exception as e:
-                print(f"[Chrome 실행] 시도 {_launch_try}/2 실패: {e}")
-                if _launch_try < 2:
-                    _remove_chrome_profile_lock_files(Path(launch_kw_saved["user_data_dir"]))
-                    time.sleep(1.5)
-                else:
-                    raise
+                _p1_kill_debug_chrome()
+            except Exception:
+                pass
+            sys.exit(1)
+        browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{_P1_CDP_PORT}")
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        try:  # keep-alive 탭: 작업 탭이 닫혀도 Chrome 유지
+            _ = context.pages[0] if context.pages else context.new_page()
+        except Exception:
+            pass
         print(
-            "[시작] Chrome 실행 완료. Phase2와 동일: new_page → domemedb(commit→domcontentloaded).",
+            "[시작] Chrome 연결 완료(CDP). new_page → domemedb(commit→domcontentloaded).",
             flush=True,
         )
         work_page = _domeme_startup_new_tab_goto_domemedb(context, log_prefix="[시작] ")
@@ -3359,11 +3457,23 @@ def main():
                                 f"&sort1=&sort2=&sort3=&sort4=&sort5=&b2bStatus=0&pageLimit={TARGET_PER_WEEK}"
                             )
                             work_page = page
-                            work_page.goto(mb_save_list_url, wait_until=_WAIT, timeout=30000)
-                            print(f"마이박스 {TARGET_PER_WEEK}개 보기 페이지 이동: {speedgo_hash}")
-                            time.sleep(_S(0.8, 2))
-                            page.wait_for_selector('text=상품목록', state="visible", timeout=15000)
-                            print("마이박스 상품목록 페이지 로딩 완료")
+                            # [안정화] 상품목록 로딩: 30s + 3회 재시도(매번 재이동) — 일시 지연/ERR_ABORTED로
+                            # 사업자가 영구 누락되던 최대 원인 완화
+                            _mb_ok = False
+                            for _mb_try in range(1, 4):
+                                try:
+                                    work_page.goto(mb_save_list_url, wait_until=_WAIT, timeout=30000)
+                                    print(f"마이박스 {TARGET_PER_WEEK}개 보기 페이지 이동: {speedgo_hash} (시도 {_mb_try}/3)")
+                                    time.sleep(_S(0.8, 2))
+                                    page.wait_for_selector('text=상품목록', state="visible", timeout=30000)
+                                    print("마이박스 상품목록 페이지 로딩 완료")
+                                    _mb_ok = True
+                                    break
+                                except Exception as _mbe:
+                                    print(f"[{rank}번] 마이박스 상품목록 로딩 실패(시도 {_mb_try}/3): {str(_mbe)[:120]}")
+                                    time.sleep(_S(1.5, 3.5))
+                            if not _mb_ok:
+                                raise RuntimeError("마이박스 상품목록 로딩 3회 실패")
                             time.sleep(_S(0.4, 1))
 
                             # 상품 행 로딩 대기 (pageLimit=1000이므로 200/244/500 등 개수 무관)
@@ -3687,7 +3797,11 @@ def main():
                 input()
 
         finally:
-            pass
+            try:
+                _n = _p1_kill_debug_chrome()
+                print(f"[종료] Phase1 전용 Chrome 정리 ({_n}개). 개인 Chrome 미접촉.", flush=True)
+            except Exception:
+                pass
 
     # === Phase 2 (별도 Playwright 블록): event loop/Profile 충돌 방지 ===
     if _phase2_deferred and _phase2_upload_items:

@@ -202,36 +202,38 @@ def _p1_steps(folder: Path, n: int):
 
 @app.route("/progress")
 def progress():
+    try:
+        from domeme_auto_login_temp import RUNS_PER_WEEK
+    except Exception:
+        RUNS_PER_WEEK = 7
     ymw_str, _wr = get_upload_path_from_state()
     base = Path(EXCEL_SAVE_BASE) / ymw_str
     n_acc = max(6, len(ACCOUNTS))
     runs = []
-    if base.is_dir():
-        wr_dirs = sorted(
-            [d for d in base.iterdir() if d.is_dir() and d.name.endswith("회차")],
-            key=lambda d: int("".join(filter(str.isdigit, d.name)) or 0))
-        for wd in wr_dirs:
-            wr_no = int("".join(filter(str.isdigit, wd.name)) or 0)
-            rows = []
-            for n in range(1, min(n_acc, 6) + 1):
-                bf = wd / f"{n}번사업자"
-                biz_id = ACCOUNTS[n - 1] if n - 1 < len(ACCOUNTS) else f"사업자{n}"
-                if bf.is_dir():
-                    steps, p1_done = _p1_steps(bf, n)
-                    sent = bf / ".phase2_sent"
-                    p2_at = ""
-                    if sent.exists():
-                        try:
-                            p2_at = sent.read_text(encoding="utf-8").strip().split("\t")[0]
-                        except Exception:
-                            p2_at = "기록됨"
-                    rows.append({"rank": n, "biz_id": biz_id, "exists": True,
-                                 "steps": steps, "p1_done": p1_done,
-                                 "p2_sent": bool(p2_at), "p2_at": p2_at})
-                else:
-                    rows.append({"rank": n, "biz_id": biz_id, "exists": False,
-                                 "steps": {}, "p1_done": False, "p2_sent": False, "p2_at": ""})
-            runs.append({"week_run": wr_no, "rows": rows})
+    # 1~7회차(RUNS_PER_WEEK) 전부 항상 표시. 폴더 없는 회차는 wr_exists=False(미실행)
+    for wr_no in range(1, RUNS_PER_WEEK + 1):
+        wd = base / f"{wr_no}회차"
+        wr_exists = wd.is_dir()
+        rows = []
+        for n in range(1, min(n_acc, 6) + 1):
+            biz_id = ACCOUNTS[n - 1] if n - 1 < len(ACCOUNTS) else f"사업자{n}"
+            bf = wd / f"{n}번사업자"
+            if wr_exists and bf.is_dir():
+                steps, p1_done = _p1_steps(bf, n)
+                sent = bf / ".phase2_sent"
+                p2_at = ""
+                if sent.exists():
+                    try:
+                        p2_at = sent.read_text(encoding="utf-8").strip().split("\t")[0]
+                    except Exception:
+                        p2_at = "기록됨"
+                rows.append({"rank": n, "biz_id": biz_id, "exists": True,
+                             "steps": steps, "p1_done": p1_done,
+                             "p2_sent": bool(p2_at), "p2_at": p2_at})
+            else:
+                rows.append({"rank": n, "biz_id": biz_id, "exists": False,
+                             "steps": {}, "p1_done": False, "p2_sent": False, "p2_at": ""})
+        runs.append({"week_run": wr_no, "wr_exists": wr_exists, "rows": rows})
     return jsonify({"ymw": ymw_str, "runs": runs,
                     "updated": datetime.now().strftime("%H:%M:%S")})
 
@@ -357,9 +359,9 @@ async function loadProg(){
   // 진척표
   const steps=['다운로드','STEP1합치기','STEP2이미지','STEP3키워드','STEP4상품명','STEP5링크','STEP6카테고리','최종'];
   let h='';
-  if(!d.runs.length){h='<div class=sub>아직 산출 폴더가 없습니다 ('+d.ymw+')</div>';}
   d.runs.forEach(run=>{
-   h+='<h3>'+run.week_run+'회차</h3><table><thead><tr><th>사업자</th><th>계정</th>';
+   var tag = run.wr_exists ? '' : ' <span class=x style="font-weight:400">(폴더없음·미실행)</span>';
+   h+='<h3>'+run.week_run+'회차'+tag+'</h3><table><thead><tr><th>사업자</th><th>계정</th>';
    steps.forEach(s=>h+='<th>'+s+'</th>');
    h+='<th>P1완료</th><th>P2전송</th></tr></thead><tbody>';
    run.rows.forEach(r=>{
