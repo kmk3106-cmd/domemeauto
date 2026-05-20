@@ -73,20 +73,31 @@ def _find_login_form(pg):
     return None, None, None
 
 
-def _login(page, user_id, password, do_logout):
-    if do_logout:
+def _verify_logged_in_as(page, user_id, timeout_s: float = 4.0) -> bool:
+    """로그인 후 페이지 텍스트에 user_id 가 보이면 본인 계정으로 확인. 베스트에포트."""
+    import time as _t
+    end = _t.time() + timeout_s
+    while _t.time() < end:
         try:
-            page.goto(DOMEME_URL, wait_until="commit", timeout=45000)
-            time.sleep(1)
-            lo = page.get_by_role("link", name="로그아웃").first
-            if lo.count() == 0:
-                lo = page.locator('a:has-text("로그아웃")').first
-            if lo.count() > 0 and lo.is_visible():
-                lo.click(timeout=5000)
-                print(f"도매매 로그아웃 → {user_id}")
-                time.sleep(1.5)
-        except Exception as e:
-            print(f"로그아웃 시도: {e}")
+            txt = page.evaluate(
+                "() => (document.body ? (document.body.innerText||'') : '') + ' ' + (document.title||'')")
+            if user_id and user_id in (txt or ""):
+                return True
+        except Exception:
+            pass
+        _t.sleep(0.4)
+    return False
+
+
+def _login(page, user_id, password, do_logout):
+    """[수정] 사업자 전환 시 컨텍스트 쿠키를 명시적으로 삭제해 '이전 사업자 세션 잔류 → 잘못된 계정으로 진행' 위험 차단.
+    이후 도매매로 fresh 진입 → 로그인 링크 → 폼 채움 → 제출 → user_id 매칭 확인.
+    do_logout 은 항상 True 로 동작(과거 click-logout 의 비결정성 회피)."""
+    try:
+        page.context.clear_cookies()
+        print(f"[로그인] 컨텍스트 쿠키 초기화 → 새 사업자 fresh 로그인 ({user_id})")
+    except Exception as e:
+        print(f"[로그인] 쿠키 초기화 실패(무시): {e}")
     if not _goto_with_retry(page, DOMEME_URL, "commit", 45000):
         return False
     try:
@@ -108,13 +119,23 @@ def _login(page, user_id, password, do_logout):
     time.sleep(1.2)
     idf, pwf, ctx = _find_login_form(page)
     if not (idf and pwf):
-        print("로그인 폼 못 찾음 (이미 로그인됐을 수 있음)")
-        return True
+        # 쿠키 초기화 후라면 정상 흐름에선 폼이 떠야 함. 그래도 폼이 없으면 한번 더 새로고침 후 재시도.
+        print("[로그인] 폼 못 찾음 — 새로고침 후 재시도")
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=20000)
+            time.sleep(1.2)
+        except Exception:
+            pass
+        idf, pwf, ctx = _find_login_form(page)
+    if not (idf and pwf):
+        print(f"[로그인] 폼 못 찾음 — 실패로 처리({user_id})")
+        return False
     idf.fill(user_id)
     time.sleep(0.2)
     pwf.fill(password)
     time.sleep(0.2)
     c = ctx or page
+    submitted = False
     for s in ['button[type="submit"]', 'input[type="submit"]', 'a:has-text("로그인")',
               'button:has-text("로그인")', '.btn_login', '#btn_login']:
         try:
@@ -122,10 +143,23 @@ def _login(page, user_id, password, do_logout):
             if b.count() > 0 and b.is_visible():
                 with page.expect_navigation(wait_until=_WAIT, timeout=15000):
                     b.click()
-                print(f"도매매 로그인 완료: {user_id}")
-                return True
+                print(f"도매매 로그인 제출: {user_id}")
+                submitted = True
+                break
         except Exception:
             continue
+    if not submitted:
+        try:
+            pwf.press("Enter")
+            time.sleep(1.5)
+            submitted = True
+        except Exception:
+            pass
+    # 본인 계정 확인 (베스트에포트)
+    if _verify_logged_in_as(page, user_id):
+        print(f"[로그인] {user_id} 계정 확인됨")
+        return True
+    print(f"[로그인] [경고] 본인 계정({user_id}) 확인 실패 — 진행은 하되 결과 점검 필요")
     return True
 
 
