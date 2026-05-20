@@ -875,7 +875,26 @@ def _biz_folder_path(ymw_str: str, week_run: int, rank: int) -> Path:
 
 
 def _missing_ranks_for_run(ymw_str: str, week_run: int, n_accounts: int):
-    return [r for r in range(1, n_accounts + 1) if not _biz_folder_path(ymw_str, week_run, r).exists()]
+    """미완 사업자 판정.
+
+    이전엔 폴더 존재 여부만 봤는데, Phase1 이 폴더만 만들고 실패한 경우(예: 쿠키 잔류로
+    로그인 폼 미표시 → 다음 사업자) 빈 폴더가 '완료'로 잘못 집계되어 다음 회차로 넘어가지
+    못한 채 영구히 스킵되는 문제가 있었음. 폴더 안에 ``_최종.xlsx`` 가 1개 이상 있어야
+    완료로 간주한다.
+    """
+    miss = []
+    for r in range(1, n_accounts + 1):
+        bf = _biz_folder_path(ymw_str, week_run, r)
+        if not bf.exists():
+            miss.append(r)
+            continue
+        try:
+            done = any(p.name.endswith("_최종.xlsx") or "회_최종" in p.name for p in bf.iterdir() if p.is_file())
+        except Exception:
+            done = False
+        if not done:
+            miss.append(r)
+    return miss
 
 
 def _parse_week_run_env():
@@ -3031,6 +3050,20 @@ def main():
                     print(f"[{rank}번] 도매매 접속 실패로 이 사업자 단계를 건너뜁니다.")
                     continue
                 time.sleep(_S(0.35, 0.8))
+                # [수정] 사업자 전환 시 컨텍스트 쿠키 명시 초기화(Phase2/3 와 동일) →
+                # 이전 사업자 세션이 chrome_phase1_cdp 프로필에 남아 '이미 로그인됨'으로
+                # 폼이 표시되지 않아 "로그인 폼을 찾지 못했습니다. 다음 사업자로." 로 빠지던 문제 차단.
+                try:
+                    context.clear_cookies()
+                    print(f"[{rank}번] 컨텍스트 쿠키 초기화 → 새 사업자 fresh 로그인 ({user_id})", flush=True)
+                except Exception as _ce:
+                    print(f"[{rank}번] 쿠키 초기화 실패(무시): {_ce}", flush=True)
+                # 쿠키 초기화 직후 도매매 페이지를 다시 로드해야 '로그인' 폼이 노출된다.
+                try:
+                    page.goto("https://domemedb.domeggook.com/index/", wait_until="domcontentloaded", timeout=30000)
+                except Exception as _ge:
+                    print(f"[{rank}번] 쿠키 초기화 후 재진입 실패(무시): {_ge}", flush=True)
+                time.sleep(_S(0.3, 0.7))
                 print(f"[{rank}번] 기존 세션 정리(필요 시 로그아웃)…")
                 _domeme_logout_if_logged_in(page)
 
