@@ -185,6 +185,43 @@ def stop():
     return jsonify({"ok": True, "msg": "중단 요청됨 (프로세스 트리 종료)"})
 
 
+# 파일명 {user_id}_{kw_tag}_{YY년M월W주차}_{N}회(_최종)?.xlsx 에서 kw_tag 추출
+import re as _re
+_KW_RE = _re.compile(r"^([^_]+)_(.+?)_\d{2}년\d{1,2}월\d+주차_\d+회(?:_최종)?\.xlsx$")
+_INTER = ("통합상품명", "domeme_links", "카테고리매핑", "keywords")
+
+
+def _extract_kw_from_folder(folder: Path) -> str:
+    """사업자 폴더에서 키워드 추출. _최종.xlsx 우선, 없으면 원본 mybox 다운로드 xlsx 사용.
+    중간 STEP 산출물(_통합상품명/_keywords/_domeme_links/_카테고리매핑)은 제외."""
+    if not folder.is_dir():
+        return ""
+    finals = sorted(folder.glob("*_최종.xlsx"),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    others = [p for p in folder.glob("*.xlsx")
+              if "_최종" not in p.name and not any(k in p.name for k in _INTER)]
+    for p in finals + others:
+        m = _KW_RE.match(p.name)
+        if m:
+            return m.group(2)
+    return ""
+
+
+def _extract_p2_kw_from_marker(folder: Path) -> str:
+    """.phase2_sent 마커의 파일명에서 kw_tag 추출 (Phase2가 실제 업로드에 사용한 _최종 파일)."""
+    sent = folder / ".phase2_sent"
+    if not sent.exists():
+        return ""
+    try:
+        line = sent.read_text(encoding="utf-8").strip()
+        parts = line.split("\t")
+        fn = parts[1] if len(parts) >= 2 else ""
+        m = _KW_RE.match(fn)
+        return m.group(2) if m else ""
+    except Exception:
+        return ""
+
+
 def _p1_steps(folder: Path, n: int):
     P = f"{n}번"
     inter = ("통합상품명", "_최종", "domeme_links", "카테고리매핑", "keywords")
@@ -241,12 +278,21 @@ def progress():
                         p2_at = sent.read_text(encoding="utf-8").strip().split("\t")[0]
                     except Exception:
                         p2_at = "기록됨"
+                kw = _extract_kw_from_folder(bf)
+                p2_kw = _extract_p2_kw_from_marker(bf)
+                p1_incomplete = [k for k, ok in steps.items() if not ok] if not p1_done else []
+                kw_match = None
+                if kw and p2_kw:
+                    kw_match = (kw == p2_kw)
                 rows.append({"rank": n, "biz_id": biz_id, "exists": True,
-                             "steps": steps, "p1_done": p1_done,
+                             "kw": kw, "p2_kw": p2_kw, "kw_match": kw_match,
+                             "p1_done": p1_done, "p1_incomplete": p1_incomplete,
                              "p2_sent": bool(p2_at), "p2_at": p2_at, **p3_payload})
             else:
                 rows.append({"rank": n, "biz_id": biz_id, "exists": False,
-                             "steps": {}, "p1_done": False, "p2_sent": False, "p2_at": "",
+                             "kw": "", "p2_kw": "", "kw_match": None,
+                             "p1_done": False, "p1_incomplete": [],
+                             "p2_sent": False, "p2_at": "",
                              **p3_payload})
         runs.append({"week_run": wr_no, "wr_exists": wr_exists, "rows": rows})
     return jsonify({"ymw": ymw_str, "runs": runs,
@@ -373,19 +419,36 @@ async function loadProg(){
   // 사업자 체크박스
   let rk='';for(let i=1;i<=6;i++)rk+='<label class=rk><input type=checkbox class=selrk value='+i+'>'+i+'번</label>';
   document.getElementById('selRanks').innerHTML=rk;
-  // 진척표
-  const steps=['다운로드','STEP1합치기','STEP2이미지','STEP3키워드','STEP4상품명','STEP5링크','STEP6카테고리','최종'];
+  // 진척표 (간소화: 키워드 · P1완료 · P2전송 · P3 삭제)
   let h='';
   d.runs.forEach(run=>{
    var tag = run.wr_exists ? '' : ' <span class=x style="font-weight:400">(폴더없음·미실행)</span>';
-   h+='<h3>'+run.week_run+'회차'+tag+'</h3><table><thead><tr><th>사업자</th><th>계정</th>';
-   steps.forEach(s=>h+='<th>'+s+'</th>');
-   h+='<th>P1완료</th><th>P2전송</th><th>P3 삭제</th></tr></thead><tbody>';
+   h+='<h3>'+run.week_run+'회차'+tag+'</h3><table><thead><tr>';
+   h+='<th>사업자</th><th>계정</th><th>키워드(P1)</th><th>P1 완료</th><th>P2 전송 (키워드)</th><th>P3 삭제</th>';
+   h+='</tr></thead><tbody>';
    run.rows.forEach(r=>{
     h+='<tr><td>'+r.rank+'번</td><td>'+r.biz_id+'</td>';
-    steps.forEach(s=>h+='<td>'+(r.exists?mark(r.steps[s]):'<span class=x>·</span>')+'</td>');
-    h+='<td>'+(r.p1_done?'<span class=y>완료</span>':'<span class=x>미완</span>')+'</td>';
-    h+='<td>'+(r.p2_sent?('<span class=y>'+(r.p2_at||'전송')+'</span>'):'<span class=x>미전송</span>')+'</td>';
+    // 키워드
+    h+='<td>'+(r.kw?('<b>'+r.kw+'</b>'):'<span class=x>—</span>')+'</td>';
+    // P1 완료: 완료 / 미완 + 어느 STEP 빠졌는지
+    if(r.p1_done){
+      h+='<td><span class=y>완료</span></td>';
+    } else if(r.exists){
+      var inc = (r.p1_incomplete||[]).join(' · ') || '진행 전';
+      h+='<td><span class=alert>미완</span> <span class=sub style="font-size:11px">('+inc+')</span></td>';
+    } else {
+      h+='<td><span class=x>—</span></td>';
+    }
+    // P2 전송 + 키워드 일치 검증
+    if(r.p2_sent){
+      var p2kw = r.p2_kw || '?';
+      var match = r.kw_match;
+      var ind = (match===true)?'<span class=y> ✓일치</span>':
+                (match===false)?'<span class=alert> ⚠불일치('+r.kw+'≠'+p2kw+')</span>':'';
+      h+='<td><span class=y>전송 '+(r.p2_at||'')+'</span> <span class=sub>#'+p2kw+'</span>'+ind+'</td>';
+    } else {
+      h+='<td><span class=x>미전송</span></td>';
+    }
     // P3 삭제 결과 매핑 (성공/잠금추정/의심/대상없음/실패/없음)
     var p3html='<span class=x>·</span>';
     var pr=r.p3_result||'';
