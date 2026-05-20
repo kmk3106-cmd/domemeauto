@@ -175,19 +175,14 @@ def main_upload_impl(page, items, password):
     for idx, (n, biz_folder, final_path, kw_tag, speedgo_hash, user_id) in enumerate(items):
         mb_save_list_url = make_mb_save_list_url(speedgo_hash)
         print(f"\n{'='*50}\n{n}번 사업자 업로드: {final_path.name} | {user_id}\n{'='*50}")
-        if idx > 0:
-            try:
-                page.goto(DOMEME_URL, wait_until="commit", timeout=45000)
-                time.sleep(1)
-                logout_btn = page.get_by_role("link", name="로그아웃").first
-                if logout_btn.count() == 0:
-                    logout_btn = page.locator('a:has-text("로그아웃")').first
-                if logout_btn.count() > 0 and logout_btn.is_visible():
-                    logout_btn.click(timeout=5000)
-                    print(f"도매매 로그아웃 ({items[idx-1][5]} → {user_id})")
-                    time.sleep(1.5)
-            except Exception as e:
-                print(f"로그아웃 시도: {e}")
+        # [수정] 사업자 전환 시 컨텍스트 쿠키 명시 초기화 → 이전 사업자 세션 잔류로
+        # "로그인 폼 못 찾음(이미 로그인됨)" 경로로 빠져 잘못된 계정으로 마이박스 업로드하던 위험 차단.
+        # (click-logout 은 비결정적이라 폐기)
+        try:
+            page.context.clear_cookies()
+            print(f"[로그인] 컨텍스트 쿠키 초기화 → 새 사업자 fresh 로그인 ({user_id})")
+        except Exception as _ce:
+            print(f"[로그인] 쿠키 초기화 실패(무시): {_ce}")
         print("도매매 URL 로 이동 중...")
         if not _goto_with_retry(page, DOMEME_URL, "commit", 45000):
             print(f"[{n}번] 도매매 진입 실패 → 이 사업자 건너뛰고 다음으로")
@@ -210,6 +205,15 @@ def main_upload_impl(page, items, password):
             print(f"로그인 링크 클릭: {e}")
         time.sleep(1.2)
         id_field, pw_field, form_ctx = find_login_form(page)
+        if not (id_field and pw_field):
+            # 쿠키 초기화 후라면 정상적으로 폼이 떠야 함. 한 번 새로고침 후 재탐색.
+            print(f"[{n}번] 로그인 폼 못 찾음 — 새로고침 후 재시도")
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=20000)
+                time.sleep(1.2)
+            except Exception:
+                pass
+            id_field, pw_field, form_ctx = find_login_form(page)
         if id_field and pw_field:
             id_field.fill(user_id)
             time.sleep(0.2)
@@ -222,12 +226,28 @@ def main_upload_impl(page, items, password):
                     if btn.count() > 0 and btn.is_visible():
                         with page.expect_navigation(wait_until=_WAIT, timeout=15000):
                             btn.click()
-                        print(f"도매매 로그인 완료: {user_id}")
+                        print(f"도매매 로그인 제출: {user_id}")
                         break
                 except Exception:
                     continue
         else:
-            print("도매매 로그인 폼을 찾지 못함 (이미 로그인됐을 수 있음)")
+            print(f"[{n}번] 로그인 폼 없음 — 이 사업자 건너뜀(잘못된 계정으로 진행 차단)")
+            continue
+        # 본인 계정 확인 (page text 에 user_id 포함 여부)
+        _ok_who = False
+        for _ in range(8):
+            try:
+                _t = page.evaluate("() => (document.body?document.body.innerText:'')+' '+(document.title||'')")
+                if user_id and user_id in (_t or ""):
+                    _ok_who = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.4)
+        if _ok_who:
+            print(f"[{n}번] 로그인 확인됨: {user_id}")
+        else:
+            print(f"[{n}번] [경고] 본인 계정({user_id}) 확인 실패 — 진행은 하되 결과 점검 필요")
         time.sleep(1)
         try:
             page.wait_for_load_state(_WAIT, timeout=15000)
@@ -583,10 +603,15 @@ def _do_select_and_send_flow(page):
         time.sleep(0.3)
         BUTTON_SELECTORS = ['button.cont_btn1[onclick*="goProduct"]', 'button.cont_btn1', 'button[onclick*="goProduct"]']
         if can_use_frame or not use_frame:
-            if target_page == page:
-                page.wait_for_selector('button.cont_btn1[onclick*="goProduct"]', state="attached", timeout=8000)
-            else:
-                target_page.wait_for_selector('button.cont_btn1[onclick*="goProduct"]', state="attached", timeout=10000)
+            # 대기 타임아웃은 비치명적으로 변경(20s) — 이전엔 8s timeout 이 try 밖이라
+            # 한 번 늦으면 Phase 2 전체가 rc=1 로 죽었음. 이제 못 찾아도 다음 단계로 진행.
+            try:
+                if target_page == page:
+                    page.wait_for_selector('button.cont_btn1[onclick*="goProduct"]', state="attached", timeout=20000)
+                else:
+                    target_page.wait_for_selector('button.cont_btn1[onclick*="goProduct"]', state="attached", timeout=20000)
+            except Exception as _we:
+                print(f"[전송버튼 대기] attached 타임아웃(무시): {str(_we)[:120]}")
             try:
                 if target_page == page:
                     page.wait_for_function("() => { const b = document.querySelector('button.cont_btn1[onclick*=\"goProduct\"]'); return b && !b.disabled && getComputedStyle(b).pointerEvents !== 'none' && b.getBoundingClientRect().height > 0; }", timeout=10000)
