@@ -801,6 +801,45 @@ _S = lambda quick, slow: (quick if FAST_MODE else slow)  # _S(0.2, 1.5) → FAST
 _WAIT = "domcontentloaded" if FAST_MODE else "load"  # 페이지 로드 대기: domcontentloaded가 더 빠름
 
 
+def _p1_close_stale_tabs(context, keep_pages, label: str = "") -> int:
+    """사업자 전환 시 누적된 stale 탭(이전 도매매 검색결과·스피드고 마이박스·다운로드 팝업 등)을
+    닫는다. keep_pages 에 포함된 page 객체와 'about:blank' keep-alive 만 유지.
+
+    탭 누적의 부작용:
+      - login/검색 click 이 stale 탭으로 빨려들어가 wrong-account 동작
+      - dialog/download 이벤트가 잘못된 page 객체에 listener 가 연결되어 timeout
+      - Chrome 메모리·이벤트 루프 점유 누적 → 후반 사업자 갈수록 느려짐/끊김
+    """
+    closed = 0
+    keep_ids = {id(p) for p in keep_pages if p is not None}
+    try:
+        pages = list(context.pages)
+    except Exception:
+        return 0
+    # keep-alive(about:blank) 1개는 유지: 모든 작업 탭 닫혀도 Chrome 자체가 종료되지 않게.
+    kept_blank = False
+    for pg in pages:
+        try:
+            if pg.is_closed():
+                continue
+            if id(pg) in keep_ids:
+                continue
+            try:
+                u = (pg.url or "").lower().strip()
+            except Exception:
+                u = ""
+            if not kept_blank and (u in ("about:blank", "", "chrome://newtab/") or u.startswith("chrome://")):
+                kept_blank = True
+                continue
+            pg.close()
+            closed += 1
+        except Exception:
+            continue
+    if closed:
+        print(f"{label}stale 탭 {closed}개 정리(남은 탭은 작업/keep-alive)", flush=True)
+    return closed
+
+
 def _domeme_work_page(context, prev_work_page, label: str):
     """context.pages[]·pages[0]·chrome 탭을 작업 대상으로 쓰지 않는다.
     이전 루프의 domemedb work_page(prev_work_page)만 재사용. 그 외는 new_page()+검증 goto.
@@ -3035,6 +3074,14 @@ def main():
                 print(f"    {target_month}월 {target_week}째주 | 키워드: {keyword}")
                 print(f"    해시태그: {biz_hash_tag} (1주 7회 동일 해시로 누적)")
                 print(f"{'='*60}")
+
+                # [수정] 사업자 전환 시 stale 탭 강제 정리. 도매매 검색결과·스피드고 마이박스·
+                # 다운로드 팝업이 사업자별로 누적되면 login/검색 click 이 이전 탭으로 빨려들어가
+                # wrong-account 동작·event listener 혼선이 발생. 작업 탭 만들기 직전에 비운다.
+                try:
+                    _p1_close_stale_tabs(context, keep_pages=[work_page] if work_page else [], label=f"[{rank}번] ")
+                except Exception as _te:
+                    print(f"[{rank}번] stale 탭 정리 예외(무시): {_te}", flush=True)
 
                 # 새 탭을 만들지 않고 이전 작업 탭(또는 이미 열린 도매매 탭)에서 이어서 로그인·검색.
                 work_page = _domeme_work_page(context, work_page, f"[{rank}번] ")
