@@ -79,6 +79,38 @@ def _env(extra):
     return e
 
 
+# === Phase 간 Chrome 완전 격리 ===
+# 각 Phase 런처는 '자기 마커'(chrome_phase{1,2,3}_cdp)에 일치하는 Chrome 만 정리한다.
+# 그러나 어떤 Phase 가 비정상 종료되거나(중단·예외), 직전 Phase Chrome 의 process tree 가
+# OS 에서 완전히 사라지기 전에 다음 Phase 가 같은 포트로 띄우려 하면 충돌 가능.
+# → 패널이 step 진입 전에 1·2·3 phase 마커 Chrome 전부를 강제 정리해 사용자 직관대로
+#    "Phase 단계 사이에 Chrome 완전히 끄고 다시 시작"을 보장한다.
+_PHASE_CHROME_MARKERS = ("chrome_phase1_cdp", "chrome_phase2_cdp", "chrome_phase3_cdp")
+
+
+def _kill_all_phase_chromes(lf=None):
+    try:
+        import psutil
+    except ImportError:
+        if lf is not None:
+            lf.write("[정리] psutil 미설치 → Chrome 사전 정리 스킵\n"); lf.flush()
+        return 0
+    killed = 0
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if "chrome" not in (p.info.get("name") or "").lower():
+                continue
+            cmd = " ".join(str(c or "") for c in (p.info.get("cmdline") or [])).lower()
+            if any(m in cmd for m in _PHASE_CHROME_MARKERS):
+                p.kill()
+                killed += 1
+        except Exception:
+            continue
+    if lf is not None and killed:
+        lf.write(f"[정리] 잔존 phase Chrome {killed}개 강제종료(다음 단계 시작 전)\n"); lf.flush()
+    return killed
+
+
 def _run_sequence(job_name, steps):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = LOG_DIR / f"panel_{ts}.log"
@@ -97,6 +129,14 @@ def _run_sequence(job_name, steps):
                 lf.write(f"\n--- {step_name}: 미구현 — 스킵 ---\n"); lf.flush()
                 continue
             lf.write(f"\n--- {step_name} 실행: {' '.join(cmd)} | env={extra} ---\n"); lf.flush()
+            # 다음 단계 시작 전 phase chrome 잔존 정리(Phase1/2/3 모두) +
+            # 포트가 OS 에서 해제될 시간을 1초 정도 확보. 같은 phase 의 첫 호출엔 영향 0.
+            try:
+                _killed_pre = _kill_all_phase_chromes(lf)
+                if _killed_pre:
+                    time.sleep(2)
+            except Exception as _ke:
+                lf.write(f"[정리] 사전 정리 예외(무시): {_ke}\n"); lf.flush()
             try:
                 with open(_STDIN_FEED, "r", encoding="ascii") as fin:
                     proc = subprocess.Popen(cmd, cwd=str(PROJECT_DIR), env=_env(extra),

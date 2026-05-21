@@ -72,7 +72,9 @@ def _wait_cdp(port, timeout=40):
 def main():
     ap = argparse.ArgumentParser(description="Phase 3 공급사판매중지 삭제")
     ap.add_argument("--ranks", default=None, help='이 사업자만 예: "2,4". 미지정=1~6 전체')
-    ap.add_argument("--port", type=int, default=9222)
+    # Phase 2 기본 포트(9222)와 충돌 방지: Phase 2 Chrome 의 process tree 가 OS 에서 완전히
+    # 사라지기 전에 Phase 3 가 같은 포트로 띄우려다 실패하는 케이스를 원천 차단.
+    ap.add_argument("--port", type=int, default=9224)
     args = ap.parse_args()
 
     from domeme_auto_login_temp import ACCOUNTS, CHROME_EXECUTABLE, PASSWORD
