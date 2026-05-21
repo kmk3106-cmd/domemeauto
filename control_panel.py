@@ -353,6 +353,27 @@ def status():
     return jsonify(s)
 
 
+@app.route("/watchdog")
+def watchdog():
+    """phase_watchdog.parse_log 결과를 JSON 으로 반환.
+    sub-agent · 패널 UI · 외부 도구 모두 이 endpoint 를 호출해 일관된 형태로 신호를 받는다.
+    """
+    try:
+        from phase_watchdog import parse_log, render_json, _pick_latest_log
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"watchdog import 실패: {e}"}), 500
+    lp_q = request.args.get("log")
+    path = Path(lp_q) if lp_q else (Path(STATE.get("log_path")) if STATE.get("log_path") else _pick_latest_log())
+    if path is None or not Path(path).exists():
+        return jsonify({"ok": False, "msg": f"로그 파일 없음: {path}"}), 404
+    try:
+        st_w = parse_log(Path(path))
+        return app.response_class(render_json(st_w, Path(path)),
+                                  mimetype="application/json; charset=utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"watchdog 분석 실패: {e}"}), 500
+
+
 PANEL_HTML = r"""
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><title>실행 제어판</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"><style>
@@ -392,9 +413,11 @@ PANEL_HTML = r"""
    <button class="bb" onclick="if(confirm('1~3 일괄: 3단계에서 공급사판매중지 상품을 전 마켓 영구 삭제합니다. 진행?'))run('p1_3')">⏩ 1~3 일괄</button>
    <button class="bb" onclick="if(confirm('채우기→2→3: P1 회차 채우기(자동 재시도) 후 2·3(영구삭제). 진행?'))run('pfill_2_3')">⏩ 채우기→2→3</button>
    <button class="bs" onclick="stop()">■ 중단</button>
+   <button class="b3" onclick="openWatchdog()" title="phase_watchdog: 현재/최근 로그 면밀 점검">📊 점검</button>
   </div>
   <div style="margin-top:10px"><span id="pill" class="pill p-idle">대기</span>
    <span id="jn" class="sub"></span><div class="sub" id="meta"></div></div>
+  <pre id="wd" style="display:none;margin-top:10px;background:#0b0e14;padding:10px;border-radius:8px;font-size:11px;line-height:1.4;color:#cdd3df;overflow:auto;max-height:480px"></pre>
  </div>
 
  <div class="box"><h3>② 선택 실행 (미진 사업자만)</h3>
@@ -422,6 +445,25 @@ PANEL_HTML = r"""
 <script>
 async function run(k){const r=await fetch('/run/'+k);const d=await r.json();if(!d.ok)alert(d.msg);refresh();}
 async function stop(){const r=await fetch('/stop');const d=await r.json();alert(d.msg);refresh();}
+async function openWatchdog(){
+ const el=document.getElementById('wd');
+ el.style.display='block';el.textContent='watchdog 분석 중…';
+ try{
+  const r=await fetch('/watchdog');const j=await r.json();
+  if(!r.ok || j.ok===false){el.textContent='[오류] '+(j.msg||r.status);return;}
+  const fails=(j.signals||[]).filter(s=>s.level==='FAIL');
+  const warns=(j.signals||[]).filter(s=>s.level==='WARN');
+  let s=`[Phase Monitor] ${j.phase||'?'} / ${j.step||'?'} · ${j.result||'?'}\n`;
+  s+=`tabs(max)=${j.pages_max}  ranks=`;
+  const rs=j.ranks||{};
+  s+=Object.keys(rs).map(k=>`${k}번:${rs[k].seg_ended?'✓':'…'}`).join(' ')+`\n`;
+  s+=`\n🔴 FAIL=${fails.length}  🟡 WARN=${warns.length}\n`;
+  fails.forEach(x=>{s+=`  🔴 L${x.line} ${x.rank?x.rank+'번ㆍ':''}[${x.code}] ${x.msg}\n`;});
+  warns.forEach(x=>{s+=`  🟡 L${x.line} ${x.rank?x.rank+'번ㆍ':''}[${x.code}] ${x.msg}\n`;});
+  s+=`\nlog: ${j.log}`;
+  el.textContent=s;
+ }catch(e){el.textContent='[오류] '+e;}
+}
 async function runSel(phase){
  const wr=document.getElementById('selWr').value;
  const ranks=[...document.querySelectorAll('.selrk:checked')].map(c=>c.value).join(',');
