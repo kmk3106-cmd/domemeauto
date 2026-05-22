@@ -83,6 +83,12 @@ RE = {
     "p1_step_skip":   re.compile(r"원본 엑셀\(\.xls/\.xlsx\) 없음 → STEP1~6 스킵"),
     "p1_seg_end":     re.compile(r"\[(\d+)번 사업자\] 구간 종료"),
     "p1_phase1_done": re.compile(r"\[Phase 1 완료\]"),
+    # ★탭 혼선 핵심 신호
+    "p1_relogin_alert": re.compile(r"dialog:.*도매매 로그인을 해주세요"),
+    "p1_select_fail":   re.compile(r"전체선택 체크 실패"),
+    "p1_hash_fail":     re.compile(r"해시태그 입력 실패"),
+    "p1_myboxadd_fail": re.compile(r"마이박스담기 버튼 클릭 실패"),
+    "p1_mybox_zero":    re.compile(r"마이박스에 해당 해시태그 상품이 0건"),
 
     # Phase 2
     "p2_chrome_up":   re.compile(r"\[Phase 2\] 디버그 Chrome 기동.*pid=(\d+).*port=(\d+)"),
@@ -340,6 +346,17 @@ def _scan_line(st: WatchState, line: str, i: int):
 
     if RE["p1_excel_fail"].search(line) and st.current_rank:
         st.ranks[st.current_rank].excel_fail_count += 1
+        return
+
+    if RE["p1_relogin_alert"].search(line) and st.current_rank:
+        st.add_signal(Signal("FAIL", "tab_confusion_relogin",
+                             f"{st.current_rank}번 검색이 stale 탭(스피드고)에 입력됨 → '도매매 로그인을 해주세요' alert "
+                             "(로그인 직후 세션 끊김/탭 혼선)", i))
+        return
+
+    if RE["p1_mybox_zero"].search(line) and st.current_rank:
+        st.add_signal(Signal("FAIL", "mybox_hash_zero",
+                             f"{st.current_rank}번 마이박스 해시태그 상품 0건 → 마이박스담기 실패 추정, _최종.xlsx 미생성", i))
         return
 
     if RE["p1_dl_fail"].search(line) and st.current_rank:

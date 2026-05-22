@@ -2265,7 +2265,16 @@ def _wait_logged_in_domeme(page, timeout_ms: int = 28000) -> bool:
 
 
 def _domeme_wait_login_success_any_tab(context, page, timeout_ms: int = 28000):
-    """제출 후 현재 탭 또는 새로 연 탭에서 로그인 성공을 기다림. 성공 시 해당 Page, 실패 시 None."""
+    """제출 후 현재 탭 또는 새로 연 탭에서 로그인 성공을 기다림. 성공 시 해당 Page, 실패 시 None.
+
+    ★중요: 도매매 로그인이므로 'domemedb.domeggook.com' 탭을 최우선으로 본다.
+    이전 사업자의 stale 스피드고 마이박스 탭이 로그인된 것처럼 보여 그 탭을 success_page 로
+    반환하면, 이후 검색이 스피드고 탭에 입력되어 '도매매 로그인을 해주세요' alert → 0건 →
+    _최종.xlsx 미생성으로 이어졌다(2~6번 동시 실패 원인). 그래서 우선순위를 둔다:
+      1순위: domemedb 탭이면서 logged-in
+      2순위: 인자로 받은 현재 page 가 logged-in
+      (speedgo·기타 탭은 domeme 로그인 성공 판정 근거로 쓰지 않는다)
+    """
     deadline = time.time() + timeout_ms / 1000.0
     step = 0.35 if FAST_MODE else 0.45
     while time.time() < deadline:
@@ -2273,12 +2282,21 @@ def _domeme_wait_login_success_any_tab(context, page, timeout_ms: int = 28000):
             plist = [p for p in list(context.pages) if not p.is_closed()]
         except Exception:
             plist = [page]
+        # 1순위: domemedb 탭
         for p in plist:
             try:
-                if _domeme_page_looks_logged_in(p):
+                u = (p.url or "").lower()
+                if "domemedb.domeggook.com" in u and _domeme_page_looks_logged_in(p):
                     return p
             except Exception:
                 pass
+        # 2순위: 현재 작업 page 자체(도매매 도메인일 때만)
+        try:
+            pu = (page.url or "").lower()
+            if "domeggook.com" in pu and "speedgo" not in pu and _domeme_page_looks_logged_in(page):
+                return page
+        except Exception:
+            pass
         time.sleep(step)
     return None
 
@@ -3075,13 +3093,28 @@ def main():
                 print(f"    해시태그: {biz_hash_tag} (1주 7회 동일 해시로 누적)")
                 print(f"{'='*60}")
 
-                # [수정] 사업자 전환 시 stale 탭 강제 정리. 도매매 검색결과·스피드고 마이박스·
+                # [수정2] 사업자 전환 시 stale 탭 강제 정리. 도매매 검색결과·스피드고 마이박스·
                 # 다운로드 팝업이 사업자별로 누적되면 login/검색 click 이 이전 탭으로 빨려들어가
-                # wrong-account 동작·event listener 혼선이 발생. 작업 탭 만들기 직전에 비운다.
+                # wrong-account 동작·event listener 혼선이 발생.
+                # ★핵심 버그: 직전 사업자 처리 끝에 work_page 가 '스피드고 마이박스 탭'으로
+                #   바뀌어 있으면, 그 탭을 keep 해버려 검색이 도매매가 아닌 스피드고 탭에 입력됨
+                #   → "도매매 로그인을 해주세요" alert → 마이박스담기 0건 → _최종.xlsx 미생성.
+                #   따라서 work_page 는 'domemedb' 탭일 때만 보존하고, 그 외(speedgo 등)는 닫는다.
+                _keep = []
                 try:
-                    _p1_close_stale_tabs(context, keep_pages=[work_page] if work_page else [], label=f"[{rank}번] ")
+                    if work_page is not None and not work_page.is_closed():
+                        _wpu = (work_page.url or "").lower()
+                        if "domemedb.domeggook.com" in _wpu:
+                            _keep = [work_page]
+                except Exception:
+                    _keep = []
+                try:
+                    _p1_close_stale_tabs(context, keep_pages=_keep, label=f"[{rank}번] ")
                 except Exception as _te:
                     print(f"[{rank}번] stale 탭 정리 예외(무시): {_te}", flush=True)
+                # 보존 대상이 아니었으면 work_page 참조를 버려 _domeme_work_page 가 새 도매매 탭을 만들게 한다.
+                if not _keep:
+                    work_page = None
 
                 # 새 탭을 만들지 않고 이전 작업 탭(또는 이미 열린 도매매 탭)에서 이어서 로그인·검색.
                 work_page = _domeme_work_page(context, work_page, f"[{rank}번] ")
