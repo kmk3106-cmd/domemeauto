@@ -12,6 +12,7 @@ Phase 3: 스피드고 '전송관리 > 공급사판매중지' 상품을 사업자
 로그인/네비게이션은 검증된 test_speedgo_upload_1번 의 동선·셀렉터를 재사용.
 """
 import json
+import os
 import time
 from pathlib import Path
 
@@ -21,9 +22,27 @@ _PROJECT_DIR = Path(__file__).resolve().parent
 _PHASE3_STATE_FILE = _PROJECT_DIR / "phase3_state.json"
 
 
+def _current_week_run():
+    """이번 P3 가 어느 회차 사이클에서 돌았는지 식별.
+    '한 회차 = 한 P1~P3 사이클' 이므로 P3 결과는 그 회차 행에만 표시돼야 한다.
+    .week_run_state(get_upload_path_from_state) 의 현재 회차를 기록해 둔다."""
+    # 1) 환경변수 우선 (제어판 선택실행이 WEEK_RUN 을 넘기는 경우)
+    ev = os.environ.get("WEEK_RUN", "").strip()
+    if ev.isdigit():
+        return int(ev)
+    # 2) .week_run_state
+    try:
+        from domeme_auto_login_temp import get_upload_path_from_state
+        _ymw, wr = get_upload_path_from_state()
+        return int(wr)
+    except Exception:
+        return None
+
+
 def _write_phase3_marker(rank: int, biz_id: str, result: str,
                           before_cnt: int = -1, after_cnt: int = -1) -> None:
-    """phase3_state.json 갱신: rank → {ts, biz_id, result, before, after}.
+    """phase3_state.json 갱신: rank → {ts, biz_id, result, before, after, week_run}.
+    week_run: 이 P3 가 실행된 회차(대시보드는 이 회차 행에만 P3 결과를 표시).
     result 코드: alert/count_drop/revert_drop/page_closed (성공) |
                  revert_noop (잠금-only 추정) | timeout_suspect (의심) |
                  no_target (대상없음) | no_login/no_open/no_popup/error (실패)."""
@@ -41,6 +60,7 @@ def _write_phase3_marker(rank: int, biz_id: str, result: str,
         "result": result,
         "before": before_cnt,
         "after": after_cnt,
+        "week_run": _current_week_run(),
     }
     _PHASE3_STATE_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
