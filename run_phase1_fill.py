@@ -38,6 +38,15 @@ def _has_work_left():
     if plan is None:
         return None
     wr, ranks = plan
+    # [수정] 선택실행(ONLY_RANKS) 존중: 선택한 사업자 중 '미완'인 것만 남긴다.
+    # 이게 없으면 ONLY_RANKS=2 인데 3번도 미완이면 _has_work_left 가 계속 work-left 로
+    # 판단해 무한 재실행(2번은 이미 끝났는데도)하거나, 선택 안 한 사업자까지 끌려 들어갔다.
+    only = os.environ.get("ONLY_RANKS", "").strip()
+    if only:
+        sel = {int(x) for x in only.replace(" ", "").split(",") if x.strip().isdigit()}
+        ranks = [r for r in ranks if r in sel]
+        if not ranks:
+            return None  # 선택 사업자는 모두 완료 → 더 재시도할 것 없음
     return (ymw_str, wr, ranks)
 
 

@@ -54,13 +54,17 @@ P1_FILL = [PY, "-u", "run_phase1_fill.py"]  # 회차 채우기(자동 재시도)
 P2 = [PY, "-u", "run_phase2.py"]
 P3 = [PY, "-u", "run_phase3.py"]
 # 고정 버튼: (표시명, [(단계명, cmd|None, env추가dict), ...])
+# [정책] Phase 1 단계는 모두 P1_FILL(자동 재시도 래퍼)로 통일.
+#   래퍼가 '미완 사업자(=_최종.xlsx 없음) 가 없을 때까지' 최대 FILL_RETRY(기본 3)회 재실행하며,
+#   매 회 새 Chrome 으로 띄우므로 마이박스담기 실패·엑셀 타임아웃·browser-dead 까지 복구한다.
+#   ONLY_RANKS 가 있으면 선택 사업자만 대상으로 미완 여부를 판정(run_phase1_fill 에서 처리).
 JOBS = {
-    "p1":      ("Phase 1만", [("Phase 1", P1, {})]),
+    "p1":      ("Phase 1만 (실패 사업자 자동 재시도)", [("Phase 1", P1_FILL, {})]),
     "p1_fill": ("Phase 1 채우기 (회차 완성까지 자동 재시도)", [("Phase 1 채우기", P1_FILL, {})]),
     "p2":      ("Phase 2만", [("Phase 2", P2, {})]),
     "p3":      ("Phase 3만 (공급사판매중지 삭제)", [("Phase 3", P3, {})]),
-    "p1_2":    ("Phase 1~2 일괄", [("Phase 1", P1, {}), ("Phase 2", P2, {})]),
-    "p1_3":    ("Phase 1~3 일괄", [("Phase 1", P1, {}), ("Phase 2", P2, {}), ("Phase 3", P3, {})]),
+    "p1_2":    ("Phase 1~2 일괄", [("Phase 1", P1_FILL, {}), ("Phase 2", P2, {})]),
+    "p1_3":    ("Phase 1~3 일괄", [("Phase 1", P1_FILL, {}), ("Phase 2", P2, {}), ("Phase 3", P3, {})]),
     "pfill_2_3": ("Phase 채우기→2→3", [("Phase 1 채우기", P1_FILL, {}), ("Phase 2", P2, {}), ("Phase 3", P3, {})]),
 }
 
@@ -192,17 +196,18 @@ def run_sel():
     p1_env = {"WEEK_RUN": str(wr), "ONLY_RANKS": rcsv}
     p2_cmd = [PY, "-u", "run_phase2.py", "--week-run", str(wr), "--ranks", rcsv]
     p3_cmd = [PY, "-u", "run_phase3.py", "--ranks", rcsv]
+    # [정책] 선택 Phase1 도 P1_FILL(자동 재시도 래퍼)로 실행 → 실패 사업자만 새 Chrome 으로 재시도.
     if phase == "p1":
-        steps = [(f"Phase1 {wr}회차 {rcsv}번", P1, p1_env)]
+        steps = [(f"Phase1 {wr}회차 {rcsv}번", P1_FILL, p1_env)]
     elif phase == "p2":
         steps = [(f"Phase2 {wr}회차 {rcsv}번", p2_cmd, {})]
     elif phase == "p3":
         steps = [(f"Phase3 {rcsv}번(공급사판매중지)", p3_cmd, {})]
     elif phase == "p1_2":
-        steps = [(f"Phase1 {wr}회차 {rcsv}번", P1, p1_env),
+        steps = [(f"Phase1 {wr}회차 {rcsv}번", P1_FILL, p1_env),
                  (f"Phase2 {wr}회차 {rcsv}번", p2_cmd, {})]
     elif phase == "p1_3":
-        steps = [(f"Phase1 {wr}회차 {rcsv}번", P1, p1_env),
+        steps = [(f"Phase1 {wr}회차 {rcsv}번", P1_FILL, p1_env),
                  (f"Phase2 {wr}회차 {rcsv}번", p2_cmd, {}),
                  (f"Phase3 {rcsv}번", p3_cmd, {})]
     else:
