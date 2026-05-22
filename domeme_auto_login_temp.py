@@ -3660,12 +3660,10 @@ def main():
                                                 )
 
                                         page.on("response", _on_response)
-
-                                        def _on_dialog(d):
-                                            _log_excel_event("dialog", f"type={d.type} message={(d.message or '')[:100]}")
-                                            d.accept()  # 블로킹 방지
-
-                                        page.on("dialog", _on_dialog)
+                                        # ★dialog 핸들러는 여기(컨텍스트당 1회)서 등록하지 않는다.
+                                        #   page.on('dialog') 는 페이지 단위라, 첫 사업자 page 에만 붙어
+                                        #   2번째 사업자부터 다운로드 confirm 이 자동 dismiss → 60s timeout.
+                                        #   → 아래 다운로드 직전에 '사업자마다' 등록한다.
                                 except Exception as le:
                                     print(f"[엑셀로그] 리스너 등록 실패: {le}")
 
@@ -3748,9 +3746,24 @@ def main():
                             elif excel_btn and excel_btn.count() > 0:
                                 excel_result = "미시도"
                                 try:
-                                    # "선택한 상품을 다운로드하겠습니까?" - 네이티브 confirm() 자동 수락 (프로필로그 시 _on_dialog에서 처리)
-                                    if not ENABLE_PROFILE_COMPARE_LOG:
-                                        page.on("dialog", lambda d: d.accept())
+                                    # ★[핵심 수정] "선택한 상품을 다운로드하겠습니까?" 네이티브 confirm 자동 수락 핸들러를
+                                    #   '사업자마다(이 다운로드 page 에)' 등록. page.on('dialog') 는 페이지 단위이므로
+                                    #   컨텍스트당 1회만 등록하면 2번째 사업자부터 confirm 이 자동 dismiss 되어
+                                    #   download 이벤트가 영영 안 와 60s timeout → _최종.xlsx 미생성으로 이어졌다.
+                                    def _dl_dialog(d):
+                                        try:
+                                            if ENABLE_PROFILE_COMPARE_LOG:
+                                                _log_excel_event("dialog", f"type={d.type} message={(d.message or '')[:100]}")
+                                        except Exception:
+                                            pass
+                                        try:
+                                            d.accept()
+                                        except Exception:
+                                            pass
+                                    try:
+                                        page.on("dialog", _dl_dialog)
+                                    except Exception:
+                                        pass
                                     excel_btn.scroll_into_view_if_needed()
                                     time.sleep(_S(0.2, 0.5))
                                     for _ in range(2):
