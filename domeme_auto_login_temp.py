@@ -3919,8 +3919,17 @@ def main():
             print(f"    python -u run_phase2.py --week-run {week_run}")
             print(f"{'='*60}")
             if not _phase2_deferred:
-                print("브라우저를 열어두었습니다. 엔터를 누르면 스크립트를 종료합니다.")
-                input()
+                # stdin 이 비대화형(파일/DEVNULL/파이프)일 때 input() 이 EOFError 를 던져
+                # 정상 완료한 Phase1 이 종료코드 1 로 끝나던 회귀 차단(→ FILL 중단·P2 스킵 유발).
+                # 이 input() 은 단독 실행 시 '브라우저 열어두기' 편의일 뿐이라 EOF 면 그냥 넘어간다.
+                try:
+                    if sys.stdin and sys.stdin.isatty():
+                        print("브라우저를 열어두었습니다. 엔터를 누르면 스크립트를 종료합니다.")
+                        input()
+                    else:
+                        print("브라우저 정리 후 종료합니다. (비대화형 실행 — 엔터 대기 생략)", flush=True)
+                except (EOFError, OSError, ValueError):
+                    pass
 
         finally:
             try:
@@ -4001,7 +4010,11 @@ def main():
             import traceback
             traceback.print_exc()
             print("엔터를 누르면 스크립트를 종료합니다.")
-        input()
+        try:
+            if sys.stdin and sys.stdin.isatty():
+                input()
+        except (EOFError, OSError, ValueError):
+            pass
 
 
 if __name__ == "__main__":
