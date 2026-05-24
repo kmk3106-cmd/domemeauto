@@ -41,8 +41,13 @@ def _current_week_run():
 
 def _write_phase3_marker(rank: int, biz_id: str, result: str,
                           before_cnt: int = -1, after_cnt: int = -1) -> None:
-    """phase3_state.json 갱신: rank → {ts, biz_id, result, before, after, week_run}.
-    week_run: 이 P3 가 실행된 회차(대시보드는 이 회차 행에만 P3 결과를 표시).
+    """phase3_state.json 갱신: "{rank}_{week_run}" → {ts, biz_id, result, before, after, week_run, rank}.
+
+    회차별 독립 키 저장: 같은 사업자에 P3 가 다른 회차에서 또 돌아도
+    이전 회차 마커가 덮어쓰이지 않음. 회차 정보가 없으면(=레거시) "{rank}" 키로 저장.
+
+    backward-compat: control_panel /progress 가 신/구 키 둘 다 읽어 합치는 식으로 처리.
+
     result 코드: alert/count_drop/revert_drop/page_closed (성공) |
                  revert_noop (잠금-only 추정) | timeout_suspect (의심) |
                  no_target (대상없음) | no_login/no_open/no_popup/error (실패)."""
@@ -54,13 +59,16 @@ def _write_phase3_marker(rank: int, biz_id: str, result: str,
                 data = {}
     except Exception:
         data = {}
-    data[str(rank)] = {
+    wr = _current_week_run()
+    key = f"{rank}_{wr}" if wr is not None else str(rank)
+    data[key] = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "biz_id": biz_id,
         "result": result,
         "before": before_cnt,
         "after": after_cnt,
-        "week_run": _current_week_run(),
+        "week_run": wr,
+        "rank": rank,
     }
     _PHASE3_STATE_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"

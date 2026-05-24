@@ -315,12 +315,14 @@ def progress():
         for n in range(1, min(n_acc, 6) + 1):
             biz_id = ACCOUNTS[n - 1] if n - 1 < len(ACCOUNTS) else f"사업자{n}"
             bf = wd / f"{n}번사업자"
-            p3 = p3_state.get(str(n)) or {}
-            # P3(공급사판매중지 영구삭제)는 '한 회차=한 P1~3 사이클' 원칙에 따라 그 회차에만 표시.
-            # phase3_state.json 의 week_run 과 현재 회차(wr_no)가 일치할 때만 결과를 붙인다.
-            # (구버전 마커는 week_run 이 없음 → 어느 회차에도 표시하지 않아 중복 오표기 방지.)
-            _p3_wr = p3.get("week_run", None)
-            if p3 and _p3_wr is not None and int(_p3_wr) == wr_no:
+            # P3 마커 조회: 신키("{rank}_{wr}") 우선, 없으면 구키("{rank}")의 week_run 일치 확인.
+            # 회차별 독립 저장 구조라 같은 사업자에 P3 가 다른 회차에서 또 돌아도 이전 마커 보존.
+            p3 = p3_state.get(f"{n}_{wr_no}")
+            if not p3:
+                _legacy = p3_state.get(str(n)) or {}
+                if _legacy.get("week_run") is not None and int(_legacy.get("week_run")) == wr_no:
+                    p3 = _legacy
+            if p3:
                 p3_payload = {"p3_result": p3.get("result", ""), "p3_at": p3.get("ts", ""),
                               "p3_before": p3.get("before", -1), "p3_after": p3.get("after", -1)}
             else:
