@@ -357,6 +357,102 @@ def progress():
                     "updated": datetime.now().strftime("%H:%M:%S")})
 
 
+import re as _re_live
+
+# 현재 라이브 진행 정보(어느 phase / 회차 / 사업자 / 세부단계)를 잡아내는 패턴.
+# 마지막 등장 라인이 가장 최신이므로 역순 스캔 후 종결 마커(구간 종료 등)와 비교해 in-progress 여부 결정.
+_LIVE_PATTERNS = {
+    "p1_biz": _re_live.compile(r"\[1\]\s*도매매.*?\|\s*(\d+)번사업자\s*\(([^)]+)\)\s*\|\s*(\d+)회차"),
+    "p1_seg_end": _re_live.compile(r"\[(\d+)번 사업자\]\s*구간 종료"),
+    "p2_biz": _re_live.compile(r"^(\d+)번 사업자 업로드:\s*\S+\s*\|\s*(\S+)"),
+    "p2_loop_end": _re_live.compile(r"\[Phase 2\] 모든 사업자 업로드"),
+    "p3_biz": _re_live.compile(r"\[Phase 3\]\s*\[(\d+)번\]\s*\(([^)]+)\)"),
+    "p3_loop_end": _re_live.compile(r"\[Phase 3\] 삭제 루프 종료"),
+    "phase_done": _re_live.compile(r"===\s*종료:\s*\w+"),
+    # 세부 단계 힌트
+    "p1_step_login": _re_live.compile(r"^도매매 로그인 시도|로그인 완료\.$|컨텍스트 쿠키 초기화"),
+    "p1_step_search": _re_live.compile(r"^검색 실행:|마이박스담기 완료"),
+    "p1_step_speedgo": _re_live.compile(r"스피드고전송기 접속|마이박스 상품 행|전체선택 완료"),
+    "p1_step_excel": _re_live.compile(r"\[엑셀\].*클릭|엑셀 저장 완료"),
+    "p1_step_run_all": _re_live.compile(r"\[run_all\]|run_all_steps"),
+    "p2_step_upload": _re_live.compile(r"1차 엑셀업로드|업로드 실행 버튼|전체선택 체크 완료"),
+    "p2_step_send": _re_live.compile(r"스피드고전송 버튼|상품전송 대기.*?(\d+)분"),
+    "p2_step_done": _re_live.compile(r"상품전송 완료 메시지 감지"),
+    "p3_step": _re_live.compile(r"공급사판매중지|전체선택|영구삭제|삭제되었습니다"),
+}
+
+
+def _parse_live_progress(tail_text: str):
+    """로그 tail 에서 현재 진행 중인 (phase, 회차, rank, biz_id, substep) 추정.
+    완료 마커가 마지막 사업자 헤더 뒤에 오면 'idle'(=다음 사업자 대기 또는 phase 종료).
+    """
+    out = {"current_phase": "", "current_wr": None, "current_rank": None,
+           "current_biz": "", "current_substep": "", "current_minute": None}
+    if not tail_text:
+        return out
+    lines = tail_text.splitlines()
+    # 역순으로 마지막 사업자 헤더 찾기 (Phase1/2/3 별)
+    last_biz_idx = -1
+    for i in range(len(lines) - 1, -1, -1):
+        ln = lines[i]
+        m = _LIVE_PATTERNS["p1_biz"].search(ln)
+        if m:
+            out["current_phase"] = "Phase 1"
+            out["current_rank"] = int(m.group(1)); out["current_biz"] = m.group(2)
+            out["current_wr"] = int(m.group(3)); last_biz_idx = i; break
+        m = _LIVE_PATTERNS["p2_biz"].search(ln)
+        if m:
+            out["current_phase"] = "Phase 2"
+            out["current_rank"] = int(m.group(1)); out["current_biz"] = m.group(2)
+            last_biz_idx = i; break
+        m = _LIVE_PATTERNS["p3_biz"].search(ln)
+        if m:
+            out["current_phase"] = "Phase 3"
+            out["current_rank"] = int(m.group(1)); out["current_biz"] = m.group(2)
+            last_biz_idx = i; break
+    if last_biz_idx < 0:
+        return out
+    # 사업자 헤더 이후 라인에서 종결 마커(=다음 사업자로 넘어감) 또는 세부 단계 찾기
+    after = lines[last_biz_idx + 1:]
+    closed = False
+    for ln in after:
+        if _LIVE_PATTERNS["phase_done"].search(ln):
+            closed = True; break
+        if _LIVE_PATTERNS["p1_seg_end"].search(ln) or _LIVE_PATTERNS["p2_loop_end"].search(ln) or _LIVE_PATTERNS["p3_loop_end"].search(ln):
+            closed = True; break
+    if closed:
+        out["current_substep"] = "(사업자 구간 종료, 다음 단계 진입)"
+        return out
+    # 세부 단계 (마지막 등장 매치)
+    substep = ""
+    minute = None
+    for ln in after:
+        if _LIVE_PATTERNS["p2_step_done"].search(ln):
+            substep = "P2 전송 완료 감지"
+        elif _LIVE_PATTERNS["p2_step_send"].search(ln):
+            substep = "P2 스피드고 전송 대기"
+            mm = _re_live.search(r"상품전송 대기\s*(\d+)분", ln)
+            if mm:
+                minute = int(mm.group(1))
+        elif _LIVE_PATTERNS["p2_step_upload"].search(ln):
+            substep = "P2 엑셀 업로드"
+        elif _LIVE_PATTERNS["p1_step_run_all"].search(ln):
+            substep = "P1 run_all_steps (STEP1~9)"
+        elif _LIVE_PATTERNS["p1_step_excel"].search(ln):
+            substep = "P1 엑셀 다운로드"
+        elif _LIVE_PATTERNS["p1_step_speedgo"].search(ln):
+            substep = "P1 스피드고 마이박스"
+        elif _LIVE_PATTERNS["p1_step_search"].search(ln):
+            substep = "P1 도매매 검색·마이박스담기"
+        elif _LIVE_PATTERNS["p1_step_login"].search(ln):
+            substep = "P1 로그인"
+        elif _LIVE_PATTERNS["p3_step"].search(ln):
+            substep = "P3 공급사판매중지 삭제"
+    out["current_substep"] = substep or "진행 중"
+    out["current_minute"] = minute
+    return out
+
+
 @app.route("/status")
 def status():
     tail = ""
@@ -364,10 +460,15 @@ def status():
     if lp and Path(lp).exists():
         try:
             tail = "\n".join(Path(lp).read_text(encoding="utf-8", errors="replace")
-                             .splitlines()[-80:])
+                             .splitlines()[-200:])
         except Exception as e:
             tail = f"(로그 읽기 실패: {e})"
     s = dict(STATE); s["log_tail"] = tail
+    if STATE.get("running"):
+        try:
+            s.update(_parse_live_progress(tail))
+        except Exception as e:
+            s["current_substep"] = f"(파싱 실패: {e})"
     return jsonify(s)
 
 
@@ -435,6 +536,7 @@ PANEL_HTML = r"""
   </div>
   <div style="margin-top:10px"><span id="pill" class="pill p-idle">대기</span>
    <span id="jn" class="sub"></span><div class="sub" id="meta"></div></div>
+  <div id="live" style="display:none;margin-top:10px;padding:10px 14px;background:#10324a;color:#9adfff;border-radius:8px;font-size:14px;font-weight:600">▶ 진행 중</div>
   <pre id="wd" style="display:none;margin-top:10px;background:#0b0e14;padding:10px;border-radius:8px;font-size:11px;line-height:1.4;color:#cdd3df;overflow:auto;max-height:480px"></pre>
  </div>
 
@@ -499,6 +601,17 @@ async function refresh(){
   el.className='pill '+p[0];el.textContent=p[1];
   document.getElementById('jn').textContent=s.job_name?('· '+s.job_name+(s.step?(' · '+s.step):'')):'';
   document.getElementById('meta').textContent=(s.started?('시작 '+s.started):'')+(s.finished?('  종료 '+s.finished):'')+(s.pid?('  pid '+s.pid):'');
+  // 라이브 진행 (현재 회차·사업자·세부단계)
+  const live=document.getElementById('live');
+  if(s.running && (s.current_rank||s.current_phase)){
+   const wr=s.current_wr?(s.current_wr+'회차 '):'';
+   const rk=s.current_rank?(s.current_rank+'번사업자'):'';
+   const biz=s.current_biz?(' ['+s.current_biz+']'):'';
+   const sub=s.current_substep?(' · '+s.current_substep):'';
+   const mn=s.current_minute?(' ('+s.current_minute+'분 경과)'):'';
+   live.style.display='block';
+   live.innerHTML='<b>▶ 진행 중:</b> '+(s.current_phase||'')+' · '+wr+rk+biz+sub+mn;
+  } else { live.style.display='none'; }
   document.getElementById('log').textContent=s.log_tail||'(로그 없음)';
   document.getElementById('lp').textContent=s.log_path||'-';
   document.querySelectorAll('button').forEach(b=>{if(!b.classList.contains('bs'))b.disabled=s.running;});
