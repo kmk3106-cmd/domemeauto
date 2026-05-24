@@ -196,20 +196,24 @@ def run_sel():
     p1_env = {"WEEK_RUN": str(wr), "ONLY_RANKS": rcsv}
     p2_cmd = [PY, "-u", "run_phase2.py", "--week-run", str(wr), "--ranks", rcsv]
     p3_cmd = [PY, "-u", "run_phase3.py", "--ranks", rcsv]
+    # P3 는 회차 무관(전체 마켓 영구삭제)이지만, phase3_state.json 마커가 어느 회차
+    # 사이클의 P3 인지 표기되어야 대시보드가 정확히 한 회차 행에만 표시됨.
+    # wr 가 유효하면 WEEK_RUN env 로 전달 → _write_phase3_marker 가 그 회차로 마커 작성.
+    p3_env = {"WEEK_RUN": str(wr)} if 1 <= wr <= 7 else {}
     # [정책] 선택 Phase1 도 P1_FILL(자동 재시도 래퍼)로 실행 → 실패 사업자만 새 Chrome 으로 재시도.
     if phase == "p1":
         steps = [(f"Phase1 {wr}회차 {rcsv}번", P1_FILL, p1_env)]
     elif phase == "p2":
         steps = [(f"Phase2 {wr}회차 {rcsv}번", p2_cmd, {})]
     elif phase == "p3":
-        steps = [(f"Phase3 {rcsv}번(공급사판매중지)", p3_cmd, {})]
+        steps = [(f"Phase3 {rcsv}번(공급사판매중지){' [' + str(wr) + '회차 마커]' if 1 <= wr <= 7 else ''}", p3_cmd, p3_env)]
     elif phase == "p1_2":
         steps = [(f"Phase1 {wr}회차 {rcsv}번", P1_FILL, p1_env),
                  (f"Phase2 {wr}회차 {rcsv}번", p2_cmd, {})]
     elif phase == "p1_3":
         steps = [(f"Phase1 {wr}회차 {rcsv}번", P1_FILL, p1_env),
                  (f"Phase2 {wr}회차 {rcsv}번", p2_cmd, {}),
-                 (f"Phase3 {rcsv}번", p3_cmd, {})]
+                 (f"Phase3 {rcsv}번 [{wr}회차 마커]", p3_cmd, p3_env)]
     else:
         return jsonify({"ok": False, "msg": "phase=p1|p2|p3|p1_2|p1_3"}), 400
     name = f"선택실행 {phase} · {('('+str(wr)+'회차) ') if needs_wr else ''}{rcsv}번"
