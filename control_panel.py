@@ -23,6 +23,50 @@ for _sn in ("stdout", "stderr"):
     except Exception:
         pass
 
+# =============================================================================
+# Supervisor 모드: 패널이 죽어도 자동 재시작.
+# - CLI 인자 '--panel-child' 가 없으면 supervisor 모드로 진입, 자식 Flask
+#   프로세스를 spawn 하고 종료될 때마다 5초 대기 후 재spawn.
+# - '--panel-child' 가 있으면 아래 본문(import Flask, 라우트, app.run) 실행.
+# - CLI 인자 방식: Windows 에서 env 전달이 일관되지 않은 문제 회피.
+# - VBS/Startup 호출 → supervisor → 자식 죽음 → 자동 부활.
+# - 완전 종료는 작업관리자에서 supervisor python.exe (인자에 --panel-child 없음) kill.
+# =============================================================================
+_PANEL_CHILD_FLAG = "--panel-child"
+if __name__ == "__main__" and _PANEL_CHILD_FLAG not in sys.argv:
+    _SUP_LOG = Path(__file__).resolve().parent / "logs" / "panel_supervisor.log"
+    _SUP_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+    def _sup_log(msg: str) -> None:
+        line = f"[{datetime.now().isoformat(timespec='seconds')}] [supervisor] {msg}"
+        print(line, flush=True)
+        try:
+            with open(_SUP_LOG, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+    _sup_log(f"시작 (PID {os.getpid()}) ppid={os.getppid()} argv={sys.argv!r}")
+    _restart_count = 0
+    while True:
+        _restart_count += 1
+        _sup_log(f"자식 spawn (#{_restart_count})")
+        _t0 = time.time()
+        try:
+            _rc = subprocess.call(
+                [sys.executable, "-u", str(Path(__file__).resolve()), _PANEL_CHILD_FLAG],
+            )
+        except KeyboardInterrupt:
+            _sup_log("KeyboardInterrupt — supervisor 종료")
+            sys.exit(0)
+        except Exception as _e:
+            _sup_log(f"자식 spawn 예외: {_e}")
+            _rc = -1
+        _dt = int(time.time() - _t0)
+        _sup_log(f"자식 종료 rc={_rc} (수명 {_dt}s) → 5초 후 재시작")
+        # 너무 빠른 crash loop 방지: 5초 이내 종료 시 대기 시간 늘림
+        time.sleep(5 if _dt >= 5 else min(60, 5 * (1 + _restart_count // 5)))
+
 try:
     from flask import Flask, jsonify, render_template_string, request
 except ImportError:
