@@ -2522,17 +2522,34 @@ def _domeme_login_contexts(page):
 
 
 def _domeme_dismiss_blocking_layers(page) -> None:
-    """공지·쿠키 등 상단 레이어가 입력칸을 가리면 닫기 시도."""
-    for txt in ("닫기", "오늘 하루 안보기", "하루동안 창 보이지않기", "창 닫기", "동의하고 계속"):
+    """공지·쿠키·홍보 팝업 등 상단 레이어가 입력칸을 가리면 닫기 시도.
+    '7일간 보이지 않기' 는 아임웹×도매매 홍보 팝업 등에서 사용.
+    button/a 외에도 span/div 로 만든 링크 커버.
+    """
+    for txt in (
+        "7일간 보이지 않기", "7일간보이지않기", "7일 동안 보이지 않기",
+        "오늘 하루 안보기", "하루동안 창 보이지않기", "하루동안 창 보이지 않기",
+        "동의하고 계속", "창 닫기", "닫기",
+    ):
         try:
             loc = page.get_by_role("button", name=txt).first
             if loc.count() > 0 and loc.is_visible():
                 loc.click(timeout=2500)
                 time.sleep(0.2)
+                continue
         except Exception:
             pass
         try:
             loc = page.locator(f'a:has-text("{txt}")').first
+            if loc.count() > 0 and loc.is_visible():
+                loc.click(timeout=2500)
+                time.sleep(0.2)
+                continue
+        except Exception:
+            pass
+        # span/div 로 만든 클릭 링크(홍보 팝업 다수) 커버
+        try:
+            loc = page.locator(f':is(span,div,li,p):has-text("{txt}")').first
             if loc.count() > 0 and loc.is_visible():
                 loc.click(timeout=2500)
                 time.sleep(0.2)
