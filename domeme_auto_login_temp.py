@@ -2522,10 +2522,65 @@ def _domeme_login_contexts(page):
 
 
 def _domeme_dismiss_blocking_layers(page) -> None:
-    """공지·쿠키·홍보 팝업 등 상단 레이어가 입력칸을 가리면 닫기 시도.
-    '7일간 보이지 않기' 는 아임웹×도매매 홍보 팝업 등에서 사용.
-    button/a 외에도 span/div 로 만든 링크 커버.
+    """공지·쿠키·홍보 팝업 등 상단 레이어가 입력칸을 가리면 닫기.
+
+    도매매 홍보 팝업은 id 가 `pup_` 로 시작하는 div (예: `pup_topen`) 이고,
+    닫기 span (`.pup_close`, `.pup_close_3` = '7일간 보이지 않기') 이 onclick
+    없이 JS listener 로만 동작 → 페이지 로드 완료 전 클릭해도 반응 없음.
+    가장 확실한 방법: DOM 을 직접 `display:none` 으로 숨김
+    (실제 페이지의 close 핸들러가 하는 동작과 동일).
+
+    1) JS 로 `pup_*`·popup·modal·layui-layer 등 알려진 팝업 컨테이너 즉시 숨김
+       (page + 모든 frame)
+    2) 실패 시 텍스트 기반 클릭 fallback
     """
+    # ---- 1) JS 로 알려진 홍보/공지 팝업 컨테이너 강제 숨김 (page + frames) ----
+    _js_hide = """() => {
+        let hidden = 0;
+        const sels = [
+            'div[id^="pup_"]',      // 도매매 홍보 팝업 (pup_topen 등)
+            'div[id^="popup_"]',
+            'div[id*="Popup"]',
+            'div[id*="modal"]',
+            'div[class*="popup"]',
+            'div.layui-layer',
+            'div.layui-layer-shade',
+            'div.quan_bg2',         // 도매매 팝업 반투명 배경
+        ];
+        for (const s of sels) {
+            document.querySelectorAll(s).forEach(el => {
+                const cs = getComputedStyle(el);
+                if (cs.display !== 'none' && cs.visibility !== 'hidden') {
+                    el.style.setProperty('display', 'none', 'important');
+                    hidden++;
+                }
+            });
+        }
+        return hidden;
+    }"""
+    total_hidden = 0
+    try:
+        n = page.evaluate(_js_hide)
+        if isinstance(n, int):
+            total_hidden += n
+    except Exception:
+        pass
+    for fr in list(getattr(page, "frames", []) or []):
+        if fr == getattr(page, "main_frame", None):
+            continue
+        try:
+            n = fr.evaluate(_js_hide)
+            if isinstance(n, int):
+                total_hidden += n
+        except Exception:
+            pass
+    if total_hidden:
+        try:
+            print(f"[팝업정리] {total_hidden}개 요소 강제 숨김", flush=True)
+        except Exception:
+            pass
+
+    # ---- 2) 텍스트 기반 클릭 fallback (button/a/span/div 커버) ----
     for txt in (
         "7일간 보이지 않기", "7일간보이지않기", "7일 동안 보이지 않기",
         "오늘 하루 안보기", "하루동안 창 보이지않기", "하루동안 창 보이지 않기",
@@ -2547,7 +2602,6 @@ def _domeme_dismiss_blocking_layers(page) -> None:
                 continue
         except Exception:
             pass
-        # span/div 로 만든 클릭 링크(홍보 팝업 다수) 커버
         try:
             loc = page.locator(f':is(span,div,li,p):has-text("{txt}")').first
             if loc.count() > 0 and loc.is_visible():
