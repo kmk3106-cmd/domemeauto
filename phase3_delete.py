@@ -16,7 +16,9 @@ import os
 import time
 from pathlib import Path
 
-from test_speedgo_upload_1번 import _goto_with_retry, DOMEME_URL, SPEEDGO_URL, _WAIT
+from test_speedgo_upload_1번 import (
+    _goto_with_retry, DOMEME_URL, SPEEDGO_URL, _WAIT, close_domeme_promo_popup,
+)
 
 _PROJECT_DIR = Path(__file__).resolve().parent
 _PHASE3_STATE_FILE = _PROJECT_DIR / "phase3_state.json"
@@ -133,6 +135,9 @@ def _login(page, user_id, password, do_logout):
     except Exception:
         pass
     time.sleep(1)
+    # 홍보 팝업(pup_topen)은 index 로드마다 다시 뜨고 배경(.quan_bg2)이「로그인」클릭을 가로챔
+    # → 9/02·9/05 P3 전원 no_login 원인. 클릭 직전에 닫는다.
+    close_domeme_promo_popup(page, "[P3] ")
     try:
         ll = page.get_by_role("link", name="로그인").first
         if ll.count() == 0:
@@ -154,6 +159,18 @@ def _login(page, user_id, password, do_logout):
             time.sleep(1.2)
         except Exception:
             pass
+        # reload 하면 팝업이 다시 뜨므로 여기서도 닫고, 가로채였던「로그인」클릭을 한 번 더 시도한다.
+        close_domeme_promo_popup(page, "[P3] ")
+        try:
+            _ll = page.get_by_role("link", name="로그인").first
+            if _ll.count() == 0:
+                _ll = page.locator('a:has-text("로그인"):not(:has-text("진행중"))').first
+            if _ll.count() > 0 and _ll.is_visible():
+                _ll.click(timeout=5000)
+                print("로그인 링크 클릭(재시도)")
+                time.sleep(1.2)
+        except Exception as _e2:
+            print(f"로그인 링크 클릭(재시도): {_e2}")
         idf, pwf, ctx = _find_login_form(page)
     if not (idf and pwf):
         print(f"[로그인] 폼 못 찾음 — 실패로 처리({user_id})")
