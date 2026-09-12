@@ -185,8 +185,26 @@ def main():
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             page = context.new_page()
             _log("[Phase 2] Chrome 연결 완료 → 전송 시작")
+            # 이번 실행에서 실제 전송된 사업자 판정: .phase2_sent 마커의 mtime 변화로 계산
+            # (이전 실행 마커가 남아있어도 이번 전송으로 오판하지 않도록).
+            def _marker_mtime(bf):
+                p = bf / ".phase2_sent"
+                try:
+                    return p.stat().st_mtime if p.exists() else None
+                except Exception:
+                    return None
+            _before = {it[0]: _marker_mtime(it[1]) for it in items}
             main_upload_impl(page, items, PASSWORD)
             _log("[Phase 2] 모든 사업자 업로드·전송 루프 종료")
+            sent = [it[0] for it in items if _marker_mtime(it[1]) not in (None, _before[it[0]])]
+            unsent = [it[0] for it in items if it[0] not in sent]
+            _log(f"[Phase 2 결과] 전송 {len(sent)}/{len(items)} — 전송됨={sent} 미전송={unsent}")
+            if items and not sent:
+                # 전부 스킵/실패인데 종료코드 0 이면 패널이 success 로 표시해 실패가 묻힘 (9/12 6/6 스킵 사례)
+                _log("[Phase 2] 경고: 전송된 사업자가 0건 → 종료코드 2 (실패)")
+                exit_code = 2
+            elif unsent:
+                _log(f"[Phase 2] 주의: 미전송 사업자 {unsent} — 선택실행(Phase2만)으로 재전송 필요")
     except SystemExit:
         raise
     except Exception as e:

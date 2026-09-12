@@ -127,6 +127,81 @@ def _goto_with_retry(target, url, wait_until, timeout, tries=4, settle=2.0):
     return False
 
 
+def close_domeme_promo_popup(page, log_prefix: str = "") -> bool:
+    """도매매 index 홍보 팝업(`#pup_topen` 계열) 닫기. (domeme_auto_login_temp._domeme_close_promo_popup 과 동일 —
+    domeme 이 이 모듈을 import 하므로 순환 방지를 위해 여기 별도 보유.)
+
+    서버가 `<div id="pup_topen" style="display:block">` 로 박아 보내므로 index 로드·reload 마다 다시 뜨고,
+    배경 `.quan_bg2` 가 pointer events 를 가로채 헤더「로그인」클릭이 timeout → '로그인 폼 없음 → 건너뜀'.
+    → goto/reload **이후·클릭 직전**에 호출. 범위는 `pup_*`·`.quan_bg2` 로만 한정(로그인 모달 등 미접촉).
+    """
+    js_probe = """() => {
+        const vis = el => {
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            return cs.display !== 'none' && cs.visibility !== 'hidden' && el.getClientRects().length > 0;
+        };
+        const pups = Array.from(document.querySelectorAll('div[id^="pup_"]')).filter(vis);
+        const bg = Array.from(document.querySelectorAll('div.quan_bg2')).filter(vis);
+        return pups.length + bg.length;
+    }"""
+    try:
+        if not page.evaluate(js_probe):
+            return False
+    except Exception:
+        return False
+
+    js_close = """() => {
+        const clicked = [];
+        for (const sel of ['.pup_close_3', '.pup_close', 'div[id^="pup_"] .close a']) {
+            const el = document.querySelector(sel);
+            if (el) { try { el.click(); clicked.push(sel); } catch (e) {} }
+        }
+        return clicked;
+    }"""
+    method = "none"
+    try:
+        clicked = page.evaluate(js_close) or []
+        if clicked:
+            method = "click:" + ",".join(clicked)
+    except Exception:
+        pass
+
+    def _gone() -> bool:
+        try:
+            return page.evaluate(js_probe) == 0
+        except Exception:
+            return True
+
+    t0 = time.time()
+    while time.time() - t0 < 1.2:
+        if _gone():
+            print(f"{log_prefix}[팝업] pup_topen 닫힘 (방식={method})", flush=True)
+            return True
+        time.sleep(0.15)
+
+    js_hide = """() => {
+        let n = 0;
+        for (const el of document.querySelectorAll('div[id^="pup_"], div.quan_bg2')) {
+            el.style.setProperty('display', 'none', 'important'); n++;
+        }
+        return n;
+    }"""
+    try:
+        n = page.evaluate(js_hide)
+        method += f"+hide:{n}"
+    except Exception:
+        pass
+    t0 = time.time()
+    while time.time() - t0 < 1.3:
+        if _gone():
+            print(f"{log_prefix}[팝업] pup_topen 닫힘 (방식={method})", flush=True)
+            return True
+        time.sleep(0.15)
+    print(f"{log_prefix}[팝업] 경고: pup_topen 이 아직 남아있음 (방식={method})", flush=True)
+    return False
+
+
 def main_upload_impl(page, items, password):
     """업로드 루프 (도매매 로그인→스피드고→엑셀업로드→전체선택→전송→상품일괄전송 X)"""
     def make_mb_save_list_url(speedgo_hash):
@@ -192,6 +267,8 @@ def main_upload_impl(page, items, password):
         except Exception:
             pass
         time.sleep(1)
+        # 홍보 팝업(pup_topen)은 index 로드마다 다시 뜨고 배경이「로그인」클릭을 가로챔 → 클릭 직전에 닫는다.
+        close_domeme_promo_popup(page, f"[{n}번] ")
         try:
             login_link = page.get_by_role("link", name="로그인").first
             if login_link.count() == 0:
@@ -213,6 +290,18 @@ def main_upload_impl(page, items, password):
                 time.sleep(1.2)
             except Exception:
                 pass
+            # reload 하면 팝업이 다시 뜨므로 여기서도 닫고, 가로채였던「로그인」클릭을 한 번 더 시도한다.
+            close_domeme_promo_popup(page, f"[{n}번] ")
+            try:
+                _ll = page.get_by_role("link", name="로그인").first
+                if _ll.count() == 0:
+                    _ll = page.locator('a:has-text("로그인"):not(:has-text("진행중"))').first
+                if _ll.count() > 0 and _ll.is_visible():
+                    _ll.click(timeout=5000)
+                    print("도매매 로그인 링크 클릭(재시도)")
+                    time.sleep(1.2)
+            except Exception as _e2:
+                print(f"로그인 링크 클릭(재시도): {_e2}")
             id_field, pw_field, form_ctx = find_login_form(page)
         if id_field and pw_field:
             id_field.fill(user_id)
