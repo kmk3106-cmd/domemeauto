@@ -2392,7 +2392,6 @@ def _domeme_login_speedgo_phase_style(page, user_id: str, password: str, log_pre
     Phase 1 이전 구현은 mem_formLogin 직접 진입(`_domeme_goto_login_pc`)이라 Referer·쿠키·폼 DOM 이
     달라질 수 있어, 잘 되는 Phase 2 와 불일치할 수 있음 → 본 경로를 먼저 시도.
     """
-    _domeme_dismiss_blocking_layers(page)
     _domeme_focus_window_for_navigation(page)
     try:
         page.goto(_DOMEME_GOTO_URL, wait_until="commit", timeout=45000)
@@ -2402,6 +2401,10 @@ def _domeme_login_speedgo_phase_style(page, user_id: str, password: str, log_pre
         print(f"{log_prefix}[Phase2동선] domemedb index 실패: {e!r}", flush=True)
         return False
     time.sleep(_S(0.4, 1.0))
+    # 홍보 팝업은 index 로드마다 다시 뜨므로 goto 이후·「로그인」클릭 직전에 닫는다.
+    # (goto 이전에 닫으면 재로드로 되살아나 배경이 클릭을 가로챔 — 9/5 실패 원인)
+    _domeme_close_promo_popup(page, log_prefix)
+    _domeme_dismiss_blocking_layers(page)
     try:
         login_link = page.get_by_role("link", name="로그인").first
         if login_link.count() == 0:
@@ -2469,6 +2472,7 @@ def _domeme_goto_login_pc(work_page, log_prefix: str) -> None:
             _domeme_navigate_with_fallbacks(work_page, log_prefix)
     time.sleep(_S(0.35, 0.75))
     _domeme_focus_window_for_navigation(work_page)
+    _domeme_close_promo_popup(work_page, log_prefix)
     _domeme_dismiss_blocking_layers(work_page)
     time.sleep(_S(0.25, 0.55))
     try:
@@ -2519,6 +2523,85 @@ def _domeme_login_contexts(page):
         seen.add(k)
         out.append(ctx)
     return out
+
+
+def _domeme_close_promo_popup(page, log_prefix: str = "") -> bool:
+    """도매매 index 홍보 팝업(`#pup_topen` 계열) 닫기.
+
+    서버가 `<div id="pup_topen" style="display:block">` 로 박아 보내므로 index 를 로드할 때마다
+    다시 뜨고, 배경 `.quan_bg2` 가 전체 화면의 pointer events 를 가로채 헤더「로그인」·검색·
+    200개 보기·전체선택 클릭이 모두 조용히 실패한다(사업자 결과 0건/50건).
+    → 반드시 **goto 이후·클릭 직전**에 호출한다. (goto 이전에 닫으면 재로드로 되살아남)
+
+    범위는 `pup_*` 계열과 그 배경으로만 한정 — 로그인 모달·layui 레이어 등은 건드리지 않는다.
+    순서: 사이트 고유 닫기(.pup_close_3='7일간 보이지 않기' → .pup_close → X 아이콘) JS click
+          → 남아있으면 display:none 강제. 닫힘은 비가시화를 최대 ~2.5s 조건 폴링으로 확인.
+    """
+    js_probe = """() => {
+        const vis = el => {
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            return cs.display !== 'none' && cs.visibility !== 'hidden' && el.getClientRects().length > 0;
+        };
+        const pups = Array.from(document.querySelectorAll('div[id^="pup_"]')).filter(vis);
+        const bg = Array.from(document.querySelectorAll('div.quan_bg2')).filter(vis);
+        return pups.length + bg.length;
+    }"""
+    try:
+        if not page.evaluate(js_probe):
+            return False
+    except Exception:
+        return False
+
+    js_close = """() => {
+        const clicked = [];
+        for (const sel of ['.pup_close_3', '.pup_close', 'div[id^="pup_"] .close a']) {
+            const el = document.querySelector(sel);
+            if (el) { try { el.click(); clicked.push(sel); } catch (e) {} }
+        }
+        return clicked;
+    }"""
+    method = "none"
+    try:
+        clicked = page.evaluate(js_close) or []
+        if clicked:
+            method = "click:" + ",".join(clicked)
+    except Exception:
+        pass
+
+    def _gone() -> bool:
+        try:
+            return page.evaluate(js_probe) == 0
+        except Exception:
+            return True
+
+    t0 = time.time()
+    while time.time() - t0 < 1.2:
+        if _gone():
+            print(f"{log_prefix}[팝업] pup_topen 닫힘 (방식={method})", flush=True)
+            return True
+        time.sleep(0.15)
+
+    js_hide = """() => {
+        let n = 0;
+        for (const el of document.querySelectorAll('div[id^="pup_"], div.quan_bg2')) {
+            el.style.setProperty('display', 'none', 'important'); n++;
+        }
+        return n;
+    }"""
+    try:
+        n = page.evaluate(js_hide)
+        method += f"+hide:{n}"
+    except Exception:
+        pass
+    t0 = time.time()
+    while time.time() - t0 < 1.3:
+        if _gone():
+            print(f"{log_prefix}[팝업] pup_topen 닫힘 (방식={method})", flush=True)
+            return True
+        time.sleep(0.15)
+    print(f"{log_prefix}[팝업] 경고: pup_topen 이 아직 남아있음 (방식={method})", flush=True)
+    return False
 
 
 def _domeme_dismiss_blocking_layers(page) -> None:
@@ -3164,6 +3247,7 @@ def main():
                         print(f"{lp}로그인 폼 미표시 → '로그인' 모달 시도…")
                         _domeme_click_open_login_modal(page, lp)
                         time.sleep(_S(0.8, 2))
+                        _domeme_close_promo_popup(page, lp)  # pup_* 계열만 — 로그인 모달은 건드리지 않음
                         _domeme_dismiss_blocking_layers(page)
                         _domeme_wait_login_password_visible(page, lp)
                         id_field, pw_field, form_ctx = _find_login_form_pair(page)
@@ -3214,6 +3298,9 @@ def main():
                     )
 
                 # === 검색 → 200개 → 마이박스담기 (해시태그로 7회 누적) ===
+                # 로그인 후 index 로 돌아오면 홍보 팝업이 다시 뜨고 배경이 검색·200개 보기·전체선택
+                # 클릭을 가로채 결과가 0건/50건이 된다(9/12 2번 사례) → 검색 직전에 반드시 닫는다.
+                _domeme_close_promo_popup(page, f"[{rank}번] ")
                 print(f"\n--- 키워드: {keyword} ---")
 
                 # === 검색창에 입력 후 검색 ===
@@ -3281,6 +3368,9 @@ def main():
                 except Exception as e:
                     print(f"국내배송상품 버튼 클릭 실패(무시): {e}")
 
+                # 결과 페이지에서도 pup_* 팝업이 남아있으면 200개 보기 dropdown 클릭이 가로채져
+                # 기본 50개로 남는다 → 클릭 직전 한 번 더 확인(팝업 없으면 evaluate 1회로 즉시 반환).
+                _domeme_close_promo_popup(page, f"[{rank}번] ")
                 # === 검색 결과: 200개 보기 + 전체선택 ===
                 try:
                     view_changed = False
