@@ -152,10 +152,30 @@ def close_domeme_promo_popup(page, log_prefix: str = "") -> bool:
         return False
 
     js_close = """() => {
+        const vis = el => {
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            return cs.display !== 'none' && cs.visibility !== 'hidden' && el.getClientRects().length > 0;
+        };
         const clicked = [];
-        for (const sel of ['.pup_close_3', '.pup_close', 'div[id^="pup_"] .close a']) {
+        // 보이는 pup_* 컨테이너마다 '그 안의' 닫기 버튼을 클릭 — '7일간 보이지 않기'(.pup_close_3) 최우선.
+        // (문서 전역 querySelector 는 여러 팝업이 있을 때 첫 번째 것만 잡아 pup_topen3 같은 2번째 팝업을 놓침)
+        const roots = Array.from(document.querySelectorAll('div[id^="pup_"]')).filter(vis);
+        for (const root of roots) {
+            let done = false;
+            for (const sel of ['.pup_close_3', '.pup_close', '.close a']) {
+                const el = root.querySelector(sel);
+                if (el) { try { el.click(); clicked.push(root.id + ':' + sel); done = true; break; } catch (e) {} }
+            }
+            // 닫기 버튼 없이 컨테이너 자체 inline onclick(display none)만 있는 팝업 호환
+            if (!done && typeof root.onclick === 'function') {
+                try { root.onclick(); clicked.push(root.id + ':onclick'); } catch (e) {}
+            }
+        }
+        // 컨테이너 밖에 닫기 버튼이 있는 구형 구조 호환
+        for (const sel of ['.pup_close_3', '.pup_close']) {
             const el = document.querySelector(sel);
-            if (el) { try { el.click(); clicked.push(sel); } catch (e) {} }
+            if (el && vis(el)) { try { el.click(); clicked.push('doc:' + sel); } catch (e) {} }
         }
         return clicked;
     }"""
@@ -346,6 +366,8 @@ def main_upload_impl(page, items, password):
             print(f"[{n}번] 스피드고 진입 실패 → 이 사업자 건너뛰고 다음으로")
             continue
         time.sleep(1)
+        # 스피드고 페이지의 홍보 팝업(pup_topen3 등)이「마이박스」클릭을 가로챔 → 첫 클릭 직전에 닫는다.
+        close_domeme_promo_popup(page, f"[{n}번] ")
         try:
             mybox = page.get_by_role("link", name="마이박스").first
             if mybox.count() > 0 and mybox.is_visible():

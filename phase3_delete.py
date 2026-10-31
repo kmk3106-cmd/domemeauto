@@ -213,6 +213,8 @@ def _open_supplier_stop(page) -> bool:
     if not _goto_with_retry(page, SPEEDGO_URL, _WAIT, 30000):
         return False
     time.sleep(1.5)
+    # 스피드고 페이지의 홍보 팝업(pup_topen3 등)이 메뉴 클릭을 가로챔 → 첫 클릭 직전에 닫는다.
+    close_domeme_promo_popup(page, "[P3] ")
     for _try in range(2):
         # 1) '공급사판매중지' 링크 바로 시도
         for loc in (page.get_by_role("link", name="공급사판매중지").first,

@@ -2554,10 +2554,30 @@ def _domeme_close_promo_popup(page, log_prefix: str = "") -> bool:
         return False
 
     js_close = """() => {
+        const vis = el => {
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            return cs.display !== 'none' && cs.visibility !== 'hidden' && el.getClientRects().length > 0;
+        };
         const clicked = [];
-        for (const sel of ['.pup_close_3', '.pup_close', 'div[id^="pup_"] .close a']) {
+        // 보이는 pup_* 컨테이너마다 '그 안의' 닫기 버튼을 클릭 — '7일간 보이지 않기'(.pup_close_3) 최우선.
+        // (문서 전역 querySelector 는 여러 팝업이 있을 때 첫 번째 것만 잡아 pup_topen3 같은 2번째 팝업을 놓침)
+        const roots = Array.from(document.querySelectorAll('div[id^="pup_"]')).filter(vis);
+        for (const root of roots) {
+            let done = false;
+            for (const sel of ['.pup_close_3', '.pup_close', '.close a']) {
+                const el = root.querySelector(sel);
+                if (el) { try { el.click(); clicked.push(root.id + ':' + sel); done = true; break; } catch (e) {} }
+            }
+            // 닫기 버튼 없이 컨테이너 자체 inline onclick(display none)만 있는 팝업 호환
+            if (!done && typeof root.onclick === 'function') {
+                try { root.onclick(); clicked.push(root.id + ':onclick'); } catch (e) {}
+            }
+        }
+        // 컨테이너 밖에 닫기 버튼이 있는 구형 구조 호환
+        for (const sel of ['.pup_close_3', '.pup_close']) {
             const el = document.querySelector(sel);
-            if (el) { try { el.click(); clicked.push(sel); } catch (e) {} }
+            if (el && vis(el)) { try { el.click(); clicked.push('doc:' + sel); } catch (e) {} }
         }
         return clicked;
     }"""
@@ -3598,6 +3618,9 @@ def main():
                             work_page.wait_for_load_state(_WAIT, timeout=15000)
                         print("스피드고전송기 접속 완료")
                         time.sleep(_S(0.6, 1.5))
+                        # 스피드고 페이지에도 홍보 팝업(pup_topen3 등)이 떠서「마이박스」메뉴 클릭을 가로챔
+                        # (10/30·10/31 06:00 전원 실패 원인). 첫 클릭 직전에 닫는다.
+                        _domeme_close_promo_popup(page, f"[{rank}번] ")
 
                         try:
                             # 1) 마이박스 메뉴 클릭
