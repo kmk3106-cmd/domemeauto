@@ -2565,11 +2565,24 @@ def _domeme_close_promo_popup(page, log_prefix: str = "") -> bool:
         const roots = Array.from(document.querySelectorAll('div[id^="pup_"]')).filter(vis);
         for (const root of roots) {
             let done = false;
-            for (const sel of ['.pup_close_3', '.pup_close', '.close a']) {
-                const el = root.querySelector(sel);
-                if (el) { try { el.click(); clicked.push(root.id + ':' + sel); done = true; break; } catch (e) {} }
+            const ctrls = Array.from(root.querySelectorAll('span,a,button')).filter(vis);
+            const txtOf = e => (e.innerText || e.textContent || '').replace(/\\s+/g, '');
+            // 1순위: 'N일간/하루동안 보이지 않기' — 글자로 찾는다 (클래스는 팝업마다 다름: .pup_close_3 / .pup_close_5 …)
+            let el = ctrls.find(e => txtOf(e).includes('보이지않기') || txtOf(e).includes('안보기'));
+            if (el) { try { el.click(); clicked.push(root.id + ':txt:' + txtOf(el).slice(0, 12)); done = true; } catch (e) {} }
+            // 2순위: '닫기' 글자
+            if (!done) {
+                el = ctrls.find(e => txtOf(e) === '닫기' || txtOf(e) === '창닫기');
+                if (el) { try { el.click(); clicked.push(root.id + ':txt:닫기'); done = true; } catch (e) {} }
             }
-            // 닫기 버튼 없이 컨테이너 자체 inline onclick(display none)만 있는 팝업 호환
+            // 3순위: 알려진 닫기 클래스/X 아이콘
+            if (!done) {
+                for (const sel of ['.pup_close_3', '.pup_close_5', '.pup_close', '.pup_close6', '.close a', 'a.pup_exit', '.pup_guanbi']) {
+                    const c = root.querySelector(sel);
+                    if (c) { try { c.click(); clicked.push(root.id + ':' + sel); done = true; break; } catch (e) {} }
+                }
+            }
+            // 4순위: 닫기 버튼 없이 컨테이너 자체 inline onclick(display none)만 있는 팝업
             if (!done && typeof root.onclick === 'function') {
                 try { root.onclick(); clicked.push(root.id + ':onclick'); } catch (e) {}
             }
